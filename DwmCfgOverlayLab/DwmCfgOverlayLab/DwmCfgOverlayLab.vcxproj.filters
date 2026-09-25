@@ -1,0 +1,114 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="源文件">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="头文件">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="IMGUI">
+      <UniqueIdentifier>{4ead66a8-6c4f-4554-a6d1-da77b26a876c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Core">
+      <UniqueIdentifier>{A550D748-8958-40D4-B730-624B70CB4901}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui_demo.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui_draw.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui_impl_dx11.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui_impl_win32.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui_tables.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="IMGUI\imgui_widgets.cpp">
+      <Filter>IMGUI</Filter>
+    </ClCompile>
+    <ClCompile Include="Bootstrap\Runtime.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Bootstrap\InstanceCoordinator.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Hooks\HookManager.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Input\InputSource.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="IPC\UiState.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="IPC\AnswerIpc.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="IPC\ControlIpc.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Platform\SystemProbe.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Profiles\DwmHookProfiles.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\FrameRouter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\BackdropCompositor.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\InvalidationWorker.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\OverlayRenderer.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Scanner\PatternScanner.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="UI\OverlayUi.cpp"><Filter>Core</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="main.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imconfig.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imgui.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imgui_impl_dx11.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imgui_impl_win32.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imgui_internal.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imstb_rectpack.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imstb_textedit.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="IMGUI\imstb_truetype.h">
+      <Filter>IMGUI</Filter>
+    </ClInclude>
+    <ClInclude Include="AsmHook.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="Bootstrap\Runtime.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Bootstrap\InstanceCoordinator.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Common\Log.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Hooks\HookManager.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Hooks\HookTypes.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Input\InputSource.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="IPC\UiState.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="IPC\AnswerIpc.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="IPC\ControlIpc.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Platform\SystemProbe.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Profiles\DwmHookProfiles.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\FrameRouter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\BackdropCompositor.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\InvalidationWorker.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\OverlayRenderer.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Scanner\PatternScanner.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="UI\OverlayUi.h"><Filter>Core</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <MASM Include="AsmHook.asm">
+      <Filter>头文件</Filter>
+    </MASM>
+  </ItemGroup>
+</Project>

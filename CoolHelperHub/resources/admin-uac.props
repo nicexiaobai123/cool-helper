@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Imported by CoolHelperHub.vcxproj (VS_PROJECT_IMPORT) so the linker
+       emits a requireAdministrator UAC manifest, matching the DWM injection
+       and SeDebugPrivilege requirements. -->
+  <ItemDefinitionGroup>
+    <Link>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
+      <UACUIAccess>false</UACUIAccess>
+    </Link>
+  </ItemDefinitionGroup>
+</Project>
