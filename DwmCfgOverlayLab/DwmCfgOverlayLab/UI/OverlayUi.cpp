@@ -404,9 +404,21 @@ void OverlayUi::BuildAnswerSection(
 	IAnswerProvider* answers, int scrollSteps) noexcept {
 	const AnswerState state = answers->GetAnswerState();
 	switch (state) {
+	case AnswerState::Connecting:
+		ImGui::TextColored(ImVec4(0.45f, 0.68f, 0.95f, 1.0f),
+			"状态：正在连接服务");
+		break;
+	case AnswerState::Waiting:
+		ImGui::TextColored(ImVec4(0.45f, 0.68f, 0.95f, 1.0f),
+			"状态：等待模型响应");
+		break;
+	case AnswerState::Thinking:
+		ImGui::TextColored(ImVec4(0.45f, 0.68f, 0.95f, 1.0f),
+			"状态：模型正在推理");
+		break;
 	case AnswerState::Streaming:
 		ImGui::TextColored(ImVec4(0.45f, 0.78f, 0.55f, 1.0f),
-			"\u72b6\u6001\uff1a\u6b63\u5728\u63a5\u6536\u7b54\u6848");
+			"状态：正在生成答案");
 		break;
 	case AnswerState::Completed:
 		ImGui::TextColored(ImVec4(0.45f, 0.78f, 0.55f, 1.0f),
@@ -435,7 +447,9 @@ void OverlayUi::BuildAnswerSection(
 			"\u6ce8\u610f\uff1a\u5185\u5bb9\u8d85\u8fc7\u4e0a\u9650\uff0c\u5df2\u622a\u65ad");
 	ImGui::Separator();
 
-	const bool streaming = state == AnswerState::Streaming;
+	const bool streaming = state == AnswerState::Connecting ||
+		state == AnswerState::Waiting || state == AnswerState::Thinking ||
+		state == AnswerState::Streaming;
 	ImGui::BeginChild("answerScroll", ImVec2(0.0f, 0.0f), 0, 0);
 	// Scroll state is only meaningful inside the child; read it before the
 	// content so SetScrollHereY can pin the view to the newest text.
@@ -448,6 +462,20 @@ void OverlayUi::BuildAnswerSection(
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.42f, 0.38f, 1.0f));
 		ImGui::TextWrapped("%s", errorBuffer);
 		ImGui::PopStyleColor();
+		ImGui::Separator();
+	}
+	char progressBuffer[512] = {};
+	answers->CopyProgressText(progressBuffer, sizeof(progressBuffer));
+	if (state == AnswerState::Thinking && progressBuffer[0]) {
+		ImGui::TextDisabled("模型推理：%s", progressBuffer);
+		ImGui::Separator();
+	}
+	else if (state == AnswerState::Connecting) {
+		ImGui::TextDisabled("正在连接并上传截图…");
+		ImGui::Separator();
+	}
+	else if (state == AnswerState::Waiting) {
+		ImGui::TextDisabled("服务已连接，等待模型响应…");
 		ImGui::Separator();
 	}
 

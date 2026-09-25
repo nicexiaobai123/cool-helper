@@ -104,7 +104,9 @@ private:
 	std::uint64_t activeRequestId_ = 0;
 	std::uint64_t lastSequence_ = 0;
 	std::string answer_;
+	std::string progressText_;
 	std::string lastError_;
+	ULONGLONG requestStartedTick_ = 0;
 	std::string settingsStatus_;
 	int screenshotWidth_ = 0;
 	int screenshotHeight_ = 0;

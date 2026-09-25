@@ -211,11 +211,21 @@ ImVec4 WithAlpha(const ImVec4& color, float alpha) noexcept {
 ImVec4 StateColor(RequestState state) noexcept {
 	switch (state) {
 	case RequestState::Capturing: return kWarning;
+	case RequestState::Connecting:
+	case RequestState::Waiting:
+	case RequestState::Thinking:
 	case RequestState::Streaming: return kAccent;
 	case RequestState::Completed: return kSuccess;
 	case RequestState::Error: return kError;
 	default: return kFaint;
 	}
+}
+
+bool IsActiveRequestState(RequestState state) noexcept {
+	return state == RequestState::Connecting ||
+		state == RequestState::Waiting ||
+		state == RequestState::Thinking ||
+		state == RequestState::Streaming;
 }
 
 bool LooksLikeError(std::string_view message) noexcept {
@@ -1500,6 +1510,12 @@ void App::RenderFrame() noexcept {
 
 void App::RenderAnswerPage() noexcept {
 	StatusChip(StateText(), StateColor(requestState_));
+	if (IsActiveRequestState(requestState_) && requestStartedTick_ != 0) {
+		ImGui::SameLine();
+		const ULONGLONG elapsedSeconds =
+			(GetTickCount64() - requestStartedTick_) / 1000;
+		ChipAlignedText("已等待 " + std::to_string(elapsedSeconds) + " 秒");
+	}
 	if (screenshotWidth_ > 0) {
 		ImGui::SameLine();
 		ChipAlignedText("截图 " + std::to_string(screenshotWidth_) +
@@ -1510,7 +1526,7 @@ void App::RenderAnswerPage() noexcept {
 	if (AccentButton("截图并提问"))
 		TriggerCapture();
 	ImGui::SameLine();
-	ImGui::BeginDisabled(requestState_ != RequestState::Streaming);
+	ImGui::BeginDisabled(!IsActiveRequestState(requestState_));
 	if (SecondaryButton("停止"))
 		aiClient_.Cancel();
 	ImGui::EndDisabled();
@@ -1519,7 +1535,9 @@ void App::RenderAnswerPage() noexcept {
 		aiClient_.Cancel();
 		answerSink_.Drain();
 		answer_.clear();
+		progressText_.clear();
 		lastError_.clear();
+		requestStartedTick_ = 0;
 		requestState_ = RequestState::Idle;
 		activeRequestId_ = nextRequestId_++;
 		lastSequence_ = 0;
@@ -1539,6 +1557,18 @@ void App::RenderAnswerPage() noexcept {
 		ImGui::Spacing();
 	}
 	ImGui::Separator();
+	if (requestState_ == RequestState::Thinking && !progressText_.empty()) {
+		ImGui::TextDisabled("模型推理：%s", progressText_.c_str());
+		ImGui::Separator();
+	}
+	else if (requestState_ == RequestState::Connecting) {
+		ImGui::TextDisabled("正在连接并上传截图…");
+		ImGui::Separator();
+	}
+	else if (requestState_ == RequestState::Waiting) {
+		ImGui::TextDisabled("服务已连接，等待模型响应…");
+		ImGui::Separator();
+	}
 
 	// Markdown answer view: wraps to the window width, streams with
 	// autoscroll, and copies remain available through the button above.
@@ -1546,7 +1576,7 @@ void App::RenderAnswerPage() noexcept {
 	markdown.bold = fontTitle_;
 	markdown.code = fontCode_;
 	ImGui::BeginChild("answerScroll", ImVec2(0.0f, 0.0f), 0, 0);
-	const bool streaming = requestState_ == RequestState::Streaming;
+	const bool streaming = IsActiveRequestState(requestState_);
 	const bool atBottom = ImGui::GetScrollY() + ImGui::GetWindowHeight() >=
 		ImGui::GetScrollMaxY() - 4.0f;
 	if (!answer_.empty()) {
@@ -2150,8 +2180,10 @@ void App::ScrollOverlayAnswer(int direction) noexcept {
 void App::TriggerCapture() noexcept {
 	aiClient_.Cancel();
 	requestState_ = RequestState::Capturing;
+	requestStartedTick_ = 0;
 	lastError_.clear();
 	answer_.clear();
+	progressText_.clear();
 	const bool restoreWindowAfterCapture =
 		window_ && IsWindowVisible(window_) != FALSE;
 	if (restoreWindowAfterCapture)
@@ -2187,7 +2219,8 @@ void App::TriggerCapture() noexcept {
 		requestState_ = RequestState::Error;
 		return;
 	}
-	requestState_ = RequestState::Streaming;
+	requestStartedTick_ = GetTickCount64();
+	requestState_ = RequestState::Connecting;
 	Logger::Write(LogLevel::Info, "Screenshot captured; request dispatched");
 }
 
@@ -2200,23 +2233,36 @@ void App::DrainAnswerEvents() noexcept {
 		lastSequence_ = event.sequence;
 		switch (event.type) {
 		case AnswerEventType::Started:
-			requestState_ = RequestState::Streaming;
+			progressText_.clear();
+			requestState_ = RequestState::Connecting;
+			break;
+		case AnswerEventType::Progress:
+			progressText_ = std::move(event.payload);
+			requestState_ = progressText_.empty()
+				? RequestState::Waiting : RequestState::Thinking;
 			break;
 		case AnswerEventType::Delta:
+			progressText_.clear();
 			answer_ += event.payload;
+			requestState_ = RequestState::Streaming;
 			break;
 		case AnswerEventType::Completed:
+			progressText_.clear();
 			requestState_ = RequestState::Completed;
 			break;
 		case AnswerEventType::Failed:
+			progressText_.clear();
 			lastError_ = event.payload;
 			requestState_ = RequestState::Error;
 			break;
 		case AnswerEventType::Cancelled:
+			progressText_.clear();
 			requestState_ = RequestState::Cancelled;
 			break;
 		case AnswerEventType::Cleared:
 			answer_.clear();
+			progressText_.clear();
+			requestStartedTick_ = 0;
 			requestState_ = RequestState::Idle;
 			break;
 		}
@@ -2285,7 +2331,10 @@ void App::RequestExit() noexcept {
 const char* App::StateText() const noexcept {
 	switch (requestState_) {
 	case RequestState::Capturing: return "正在截图";
-	case RequestState::Streaming: return "正在接收答案";
+	case RequestState::Connecting: return "正在连接服务";
+	case RequestState::Waiting: return "等待模型响应";
+	case RequestState::Thinking: return "模型正在推理";
+	case RequestState::Streaming: return "正在生成答案";
 	case RequestState::Completed: return "已完成";
 	case RequestState::Cancelled: return "已停止";
 	case RequestState::Error: return "失败";

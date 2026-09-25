@@ -12,6 +12,9 @@ struct UiSnapshot {
 
 enum class AnswerState : UINT32 {
 	Idle,
+	Connecting,
+	Waiting,
+	Thinking,
 	Streaming,
 	Completed,
 	Failed,
@@ -27,6 +30,7 @@ public:
 	virtual AnswerState GetAnswerState() const noexcept = 0;
 	virtual UINT64 CopyAnswerText(char* buffer, UINT64 capacity) const noexcept = 0;
 	virtual UINT64 CopyErrorText(char* buffer, UINT64 capacity) const noexcept = 0;
+	virtual UINT64 CopyProgressText(char* buffer, UINT64 capacity) const noexcept = 0;
 
 	virtual bool HasStreamGap() const noexcept = 0;
 	virtual bool IsTruncated() const noexcept = 0;

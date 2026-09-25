@@ -63,6 +63,7 @@ UINT32 AnswerEventTypeToIpc(AnswerEventType type) noexcept {
 	case AnswerEventType::Failed: return 3;
 	case AnswerEventType::Cancelled: return 4;
 	case AnswerEventType::Cleared: return 5;
+	case AnswerEventType::Progress: return 6;
 	}
 	return 1;
 }
@@ -257,6 +258,8 @@ DWORD WINAPI OverlayIpcSink::SenderProc(void* context) noexcept {
 }
 
 void OverlayIpcSink::SenderLoop() noexcept {
+	UINT32 wireEpoch = 0;
+	UINT32 wireSequence = 0;
 	for (;;) {
 		if (WaitForSingleObject(notifyEvent_, 1000) == WAIT_FAILED)
 			return;
@@ -287,7 +290,15 @@ void OverlayIpcSink::SenderLoop() noexcept {
 				continue;
 			const UINT32 type = AnswerEventTypeToIpc(event.type);
 			const UINT32 epoch = static_cast<UINT32>(event.requestId);
-			const UINT32 sequence = static_cast<UINT32>(event.sequence);
+			if (epoch != wireEpoch) {
+				wireEpoch = epoch;
+				wireSequence = 0;
+			}
+			// Progress is replaceable transient state. Keep it outside the wire
+			// sequence so a throttled/dropped preview can never look like lost
+			// answer content to the overlay consumer.
+			const UINT32 sequence = event.type == AnswerEventType::Progress
+				? wireSequence : ++wireSequence;
 			if (WriteMessage(type, epoch, sequence, event.payload))
 				wroteAny = true;
 		}

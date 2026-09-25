@@ -201,6 +201,37 @@ bool TestStreaming() {
 	return completed && answer == "你好 world" && server.SawVisionRequest();
 }
 
+bool TestReasoningProgress() {
+	MockServer server(200, {
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"正在分析\\n复杂度\"}}]}\n\n",
+		"data: {\"choices\":[{\"delta\":{\"content\":\"最终答案\"}}]}\n\n",
+		"data: [DONE]\n\n"
+	});
+	if (!server.Port())
+		return false;
+	TestSink sink;
+	coolhelper::OpenAIClient client;
+	if (!client.Start(TestSettings(server.Port()), { 1, 2, 3 }, 43, sink) ||
+		!sink.WaitForTerminal())
+		return false;
+	client.Cancel();
+	bool sawWaiting = false;
+	bool sawReasoning = false;
+	std::string answer;
+	for (const auto& event : sink.Events()) {
+		if (event.type == coolhelper::AnswerEventType::Progress) {
+			if (event.payload.empty())
+				sawWaiting = true;
+			else if (event.payload.find("正在分析 复杂度") != std::string::npos)
+				sawReasoning = true;
+		}
+		else if (event.type == coolhelper::AnswerEventType::Delta) {
+			answer += event.payload;
+		}
+	}
+	return sawWaiting && sawReasoning && answer == "最终答案";
+}
+
 bool TestHttpError(int status) {
 	MockServer server(status, {
 		"{\"error\":{\"message\":\"mock failure\"}}"
@@ -294,7 +325,8 @@ int main() {
 	WSADATA data = {};
 	if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
 		return 1;
-	const bool passed = TestStreaming() && TestHttpError(401) &&
+	const bool passed = TestStreaming() && TestReasoningProgress() &&
+		TestHttpError(401) &&
 		TestHttpError(429) && TestHttpError(500) &&
 		TestSiliconFlowHttpError() && TestEmptySuccessfulStream() &&
 		TestAnthropicUrlRejected() && TestCancellation();

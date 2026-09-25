@@ -27,7 +27,8 @@ enum class IpcMessageType : UINT32 {
 	Completed = 2,
 	Failed = 3,
 	Cancelled = 4,
-	Cleared = 5
+	Cleared = 5,
+	Progress = 6
 };
 
 #pragma pack(push, 8)
@@ -78,6 +79,7 @@ public:
 	AnswerState GetAnswerState() const noexcept override;
 	UINT64 CopyAnswerText(char* buffer, UINT64 capacity) const noexcept override;
 	UINT64 CopyErrorText(char* buffer, UINT64 capacity) const noexcept override;
+	UINT64 CopyProgressText(char* buffer, UINT64 capacity) const noexcept override;
 	bool HasStreamGap() const noexcept override;
 	bool IsTruncated() const noexcept override;
 
@@ -100,6 +102,7 @@ private:
 	mutable SRWLOCK modelLock_ = SRWLOCK_INIT;
 	std::string answerText_;
 	std::string errorText_;
+	std::string progressText_;
 	AnswerState state_ = AnswerState::Idle;
 	UINT64 epoch_ = 0;
 	UINT64 lastSequence_ = 0;

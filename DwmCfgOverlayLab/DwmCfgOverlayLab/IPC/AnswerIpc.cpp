@@ -165,6 +165,7 @@ void AnswerIpcService::ResetModel() noexcept {
 	AcquireSRWLockExclusive(&modelLock_);
 	answerText_.clear();
 	errorText_.clear();
+	progressText_.clear();
 	state_ = AnswerState::Idle;
 	epoch_ = 0;
 	lastSequence_ = 0;
@@ -210,11 +211,25 @@ void AnswerIpcService::ApplyMessage(
 	case IpcMessageType::Started:
 		answerText_.clear();
 		errorText_.clear();
-		state_ = AnswerState::Streaming;
+		progressText_.clear();
+		state_ = AnswerState::Connecting;
 		epoch_ = epoch;
 		lastSequence_ = sequence;
 		streamGap_ = false;
 		truncated_ = false;
+		break;
+	case IpcMessageType::Progress:
+		if (epoch_ != epoch) {
+			answerText_.clear();
+			errorText_.clear();
+			epoch_ = epoch;
+			lastSequence_ = 0;
+			streamGap_ = false;
+			truncated_ = false;
+		}
+		progressText_.assign(payload, static_cast<size_t>(payloadSize));
+		state_ = progressText_.empty()
+			? AnswerState::Waiting : AnswerState::Thinking;
 		break;
 	case IpcMessageType::Delta:
 		if (continuation) {
@@ -256,8 +271,11 @@ void AnswerIpcService::ApplyMessage(
 		else {
 			truncated_ = true;
 		}
+		progressText_.clear();
+		state_ = AnswerState::Streaming;
 		break;
 	case IpcMessageType::Completed:
+		progressText_.clear();
 		state_ = AnswerState::Completed;
 		break;
 	case IpcMessageType::Failed:
@@ -266,14 +284,17 @@ void AnswerIpcService::ApplyMessage(
 			epoch_ = epoch;
 		}
 		errorText_.assign(payload, static_cast<size_t>(payloadSize));
+		progressText_.clear();
 		state_ = AnswerState::Failed;
 		break;
 	case IpcMessageType::Cancelled:
+		progressText_.clear();
 		state_ = AnswerState::Cancelled;
 		break;
 	case IpcMessageType::Cleared:
 		answerText_.clear();
 		errorText_.clear();
+		progressText_.clear();
 		state_ = AnswerState::Idle;
 		epoch_ = 0;
 		lastSequence_ = 0;
@@ -312,6 +333,14 @@ UINT64 AnswerIpcService::CopyErrorText(
 	char* buffer, UINT64 capacity) const noexcept {
 	AcquireSRWLockShared(&modelLock_);
 	const UINT64 copied = CopyTextInto(buffer, capacity, errorText_);
+	ReleaseSRWLockShared(&modelLock_);
+	return copied;
+}
+
+UINT64 AnswerIpcService::CopyProgressText(
+	char* buffer, UINT64 capacity) const noexcept {
+	AcquireSRWLockShared(&modelLock_);
+	const UINT64 copied = CopyTextInto(buffer, capacity, progressText_);
 	ReleaseSRWLockShared(&modelLock_);
 	return copied;
 }

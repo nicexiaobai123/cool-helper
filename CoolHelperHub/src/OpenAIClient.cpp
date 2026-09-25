@@ -91,6 +91,8 @@ std::string ExtractErrorMessage(const std::string& body) {
 std::string ExtractContent(const json& value) {
 	if (value.is_string())
 		return value.get<std::string>();
+	if (value.is_object() && value.contains("content"))
+		return ExtractContent(value["content"]);
 	if (!value.is_array())
 		return {};
 	std::string result;
@@ -99,6 +101,45 @@ std::string ExtractContent(const json& value) {
 			result += item["text"].get<std::string>();
 	}
 	return result;
+}
+
+std::string ExtractReasoningContent(const json& delta) {
+	static constexpr const char* keys[] = {
+		"reasoning_content", "reasoning", "thinking"
+	};
+	for (const char* key : keys) {
+		if (!delta.contains(key) || delta[key].is_null())
+			continue;
+		if (std::string content = ExtractContent(delta[key]); !content.empty())
+			return content;
+	}
+	return {};
+}
+
+void AppendReasoningPreview(std::string& preview, std::string_view delta) {
+	bool pendingSpace = !preview.empty() && preview.back() == ' ';
+	for (const unsigned char value : delta) {
+		if (value == '\r' || value == '\n' || value == '\t' || value == ' ') {
+			pendingSpace = !preview.empty();
+			continue;
+		}
+		if (pendingSpace && !preview.empty() && preview.back() != ' ')
+			preview.push_back(' ');
+		pendingSpace = false;
+		preview.push_back(static_cast<char>(value));
+	}
+
+	// This is a transient one-line tail, not stored chain-of-thought. Keep it
+	// compact and trim only at a UTF-8 code-point boundary.
+	constexpr std::size_t kPreviewByteLimit = 360;
+	if (preview.size() <= kPreviewByteLimit)
+		return;
+	std::size_t start = preview.size() - kPreviewByteLimit;
+	while (start < preview.size() &&
+		(static_cast<unsigned char>(preview[start]) & 0xC0u) == 0x80u)
+		++start;
+	preview.erase(0, start);
+	preview.insert(0, "…");
 }
 
 } // namespace
@@ -287,10 +328,14 @@ void OpenAIClient::Run(
 			throw std::runtime_error(WindowsError("读取 HTTP 状态码"));
 		Logger::Write(LogLevel::Info,
 			"AI HTTP status " + std::to_string(status));
+		if (status >= 200 && status < 300)
+			publish(AnswerEventType::Progress);
 
 		std::string responseBytes;
 		bool doneMarker = false;
 		bool emittedContent = false;
+		std::string reasoningPreview;
+		ULONGLONG lastReasoningPublishTick = 0;
 		std::string streamError;
 		SseParser parser([&](std::string_view data) {
 			if (data == "[DONE]") {
@@ -311,6 +356,18 @@ void OpenAIClient::Run(
 			if (!choice.contains("delta") || !choice["delta"].is_object())
 				return;
 			const auto& delta = choice["delta"];
+			if (!emittedContent) {
+				const std::string reasoning = ExtractReasoningContent(delta);
+				if (!reasoning.empty()) {
+					AppendReasoningPreview(reasoningPreview, reasoning);
+					const ULONGLONG now = GetTickCount64();
+					if (lastReasoningPublishTick == 0 ||
+						now - lastReasoningPublishTick >= 250) {
+						publish(AnswerEventType::Progress, reasoningPreview);
+						lastReasoningPublishTick = now;
+					}
+				}
+			}
 			if (!delta.contains("content"))
 				return;
 			std::string content = ExtractContent(delta["content"]);

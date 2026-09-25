@@ -52,6 +52,9 @@ inline constexpr char kAlgorithmInterviewUserPrompt[] =
 enum class RequestState {
 	Idle,
 	Capturing,
+	Connecting,
+	Waiting,
+	Thinking,
 	Streaming,
 	Completed,
 	Cancelled,
@@ -89,7 +92,11 @@ enum class AnswerEventType {
 	Completed,
 	Failed,
 	Cancelled,
-	Cleared
+	Cleared,
+	// Transient model activity. An empty payload means the HTTP connection is
+	// ready and the client is waiting; a non-empty payload is a rolling
+	// reasoning preview that must never be appended to the final answer.
+	Progress
 };
 
 struct AnswerEvent {
