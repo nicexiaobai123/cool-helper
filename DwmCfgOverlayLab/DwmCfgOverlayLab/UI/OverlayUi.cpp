@@ -412,19 +412,12 @@ UiFrameResult OverlayUi::Build(
 		ImGuiCond_FirstUseEver);
 	ImGui::Begin("DwmCfgOverlayLab", nullptr, ImGuiWindowFlags_NoCollapse);
 
-	ImGui::Text("Gitbub:https://github.com/Yukin02");
 	const float framerate = ImGui::GetIO().Framerate;
-	ImGui::SameLine();
 	ImGui::TextDisabled("(%.3f ms/frame | %.1f FPS)",
 		framerate > 0.0f ? 1000.0f / framerate : 0.0f,
 		framerate);
 	if (snapshot.status[0])
 		ImGui::TextDisabled("%s", snapshot.status);
-	if (answers) {
-		ImGui::TextDisabled(answers->IsHubConnected()
-			? "CoolHelperHub IPC: connected"
-			: "CoolHelperHub IPC: waiting");
-	}
 
 	if (answers)
 		BuildAnswerSection(answers, answerScrollSteps);
