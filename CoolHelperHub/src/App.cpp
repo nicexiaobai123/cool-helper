@@ -52,6 +52,35 @@ void MergeSymbolFont(ImFontAtlas* fonts, float size) noexcept {
 		size, &config, kSymbolGlyphRanges);
 }
 
+bool BuildAndUploadHubFonts(const char* reason) noexcept {
+	ImGuiIO& io = ImGui::GetIO();
+	if (!io.Fonts->Build()) {
+		Logger::Write(LogLevel::Error, "Font atlas build failed");
+		return false;
+	}
+
+	const int width = io.Fonts->TexWidth;
+	const int height = io.Fonts->TexHeight;
+	const std::string dimensions = "Font atlas (" + std::string(reason) +
+		"): " + std::to_string(width) + "x" + std::to_string(height);
+	Logger::Write(LogLevel::Info, dimensions.c_str());
+	if (width <= 0 || height <= 0 ||
+		width > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+		height > D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION) {
+		Logger::Write(LogLevel::Error,
+			"Font atlas exceeds the D3D11 texture size limit");
+		return false;
+	}
+
+	ImGui_ImplDX11_InvalidateDeviceObjects();
+	if (!ImGui_ImplDX11_CreateDeviceObjects()) {
+		Logger::Write(LogLevel::Error,
+			"D3D11 font texture creation failed");
+		return false;
+	}
+	return true;
+}
+
 struct HotkeyOption {
 	const char* name;
 	UINT virtualKey;
@@ -1052,7 +1081,15 @@ int App::Run(HINSTANCE instance, int showCommand) noexcept {
 	if (imguiReady_) {
 		// The font atlas build is the slowest part of startup; do it while
 		// the window is still hidden so no blank frame reaches the screen.
-		ImGui::GetIO().Fonts->Build();
+		if (!BuildAndUploadHubFonts("startup")) {
+			ShutdownImGui();
+			DestroyDevice();
+			DestroyWindow(window_);
+			window_ = nullptr;
+			if (SUCCEEDED(comResult)) CoUninitialize();
+			Logger::Shutdown();
+			return 1;
+		}
 	}
 	answerSink_.SetWindow(window_);
 	answerTee_.Add(&answerSink_);
@@ -1217,12 +1254,19 @@ void App::InitializeImGui() noexcept {
 	ImGuiIO& io = ImGui::GetIO();
 	io.IniFilename = nullptr;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-	// Bake the complete Chinese range for static UI text. Maintaining a manual
-	// list caused newly added labels to render as '?'. The range storage must
-	// persist because the backend consumes it after this function returns.
+	// Start with ImGui's common Simplified Chinese set and the user's current
+	// prompt text. Baking the full 21k CJK set into all three fonts can exceed
+	// D3D11's maximum texture height; uncommon answer glyphs are added on demand.
+	// The range storage must persist because the atlas only stores its pointer.
 	ImFontGlyphRangesBuilder glyphBuilder;
-	glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseFull());
+	glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
 	glyphBuilder.AddText(kStaticUiGlyphSeed);
+	glyphBuilder.AddText(settings_.systemPrompt.c_str());
+	glyphBuilder.AddText(settings_.userPrompt.c_str());
+	glyphBuilder.AddText(kDefaultInterviewSystemPrompt);
+	glyphBuilder.AddText(kDefaultInterviewUserPrompt);
+	glyphBuilder.AddText(kAlgorithmInterviewSystemPrompt);
+	glyphBuilder.AddText(kAlgorithmInterviewUserPrompt);
 	ImVector<ImWchar> staticGlyphRanges;
 	glyphBuilder.BuildRanges(&staticGlyphRanges);
 	extraGlyphRanges_.assign(staticGlyphRanges.Data,
@@ -1243,10 +1287,10 @@ void App::ReloadHubFonts() noexcept {
 	ImFontConfig bodyConfig = {};
 	bodyConfig.OversampleH = 2;
 	bodyConfig.OversampleV = 2;
-	// The full Chinese range guarantees that all static labels and messages are
-	// available; extraGlyphRanges_ may still grow for uncommon answer symbols.
+	// The common Chinese range covers UI text while extraGlyphRanges_ carries
+	// current prompts and uncommon characters discovered in streamed answers.
 	const ImWchar* cjkRanges = extraGlyphRanges_.empty()
-		? io.Fonts->GetGlyphRangesChineseFull()
+		? io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
 		: reinterpret_cast<const ImWchar*>(extraGlyphRanges_.data());
 	fontRegular_ = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
 		std::round(18.0f * dpiScale), &bodyConfig, cjkRanges);
@@ -1342,7 +1386,7 @@ void App::ScanMissingAnswerGlyphs() noexcept {
 
 	ImGuiIO& io = ImGui::GetIO();
 	ImFontGlyphRangesBuilder builder;
-	builder.AddRanges(io.Fonts->GetGlyphRangesChineseFull());
+	builder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
 	if (!extraGlyphRanges_.empty())
 		builder.AddRanges(reinterpret_cast<const ImWchar*>(
 			extraGlyphRanges_.data()));
@@ -1350,11 +1394,25 @@ void App::ScanMissingAnswerGlyphs() noexcept {
 	pendingMissingGlyphs_.clear();
 	ImVector<ImWchar> built;
 	builder.BuildRanges(&built);
+	const std::vector<std::uint16_t> previousRanges = extraGlyphRanges_;
 	extraGlyphRanges_.assign(built.Data, built.Data + built.Size);
+	ImGui_ImplDX11_InvalidateDeviceObjects();
 	io.Fonts->Clear();
 	ReloadHubFonts();
-	io.Fonts->Build();
-	ImGui_ImplDX11_InvalidateDeviceObjects();
+	if (!BuildAndUploadHubFonts("answer glyph update")) {
+		Logger::Write(LogLevel::Warning,
+			"Extended glyph atlas rejected; restoring the previous atlas");
+		extraGlyphRanges_ = previousRanges;
+		io.Fonts->Clear();
+		ReloadHubFonts();
+		if (!BuildAndUploadHubFonts("glyph fallback")) {
+			Logger::Write(LogLevel::Error,
+				"Font atlas fallback failed; rendering has been stopped");
+			running_ = false;
+			PostQuitMessage(1);
+			return;
+		}
+	}
 	io.FontDefault = nullptr;
 	Logger::Write(LogLevel::Info,
 		"Font atlas rebuilt with extended glyph ranges");
@@ -1374,6 +1432,8 @@ void App::RenderFrame() noexcept {
 		return;
 	DrainAnswerEvents();
 	ScanMissingAnswerGlyphs();
+	if (!running_)
+		return;
 	ImGui_ImplDX11_NewFrame();
 	ImGui_ImplWin32_NewFrame();
 	ImGui::NewFrame();

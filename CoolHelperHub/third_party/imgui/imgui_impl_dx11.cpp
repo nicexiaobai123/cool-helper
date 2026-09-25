@@ -328,7 +328,7 @@ void ImGui_ImplDX11_RenderDrawData(ImDrawData* draw_data)
     ctx->IASetInputLayout(old.InputLayout); if (old.InputLayout) old.InputLayout->Release();
 }
 
-static void ImGui_ImplDX11_CreateFontsTexture()
+static bool ImGui_ImplDX11_CreateFontsTexture()
 {
     // Build texture atlas
     ImGuiIO& io = ImGui::GetIO();
@@ -356,8 +356,9 @@ static void ImGui_ImplDX11_CreateFontsTexture()
         subResource.pSysMem = pixels;
         subResource.SysMemPitch = desc.Width * 4;
         subResource.SysMemSlicePitch = 0;
-        bd->pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
-        IM_ASSERT(pTexture != nullptr);
+        const HRESULT textureResult = bd->pd3dDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+        if (FAILED(textureResult) || pTexture == nullptr)
+            return false;
 
         // Create texture view
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
@@ -366,8 +367,10 @@ static void ImGui_ImplDX11_CreateFontsTexture()
         srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = desc.MipLevels;
         srvDesc.Texture2D.MostDetailedMip = 0;
-        bd->pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &bd->pFontTextureView);
+        const HRESULT viewResult = bd->pd3dDevice->CreateShaderResourceView(pTexture, &srvDesc, &bd->pFontTextureView);
         pTexture->Release();
+        if (FAILED(viewResult) || bd->pFontTextureView == nullptr)
+            return false;
     }
 
     // Store our identifier
@@ -386,8 +389,19 @@ static void ImGui_ImplDX11_CreateFontsTexture()
         desc.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
         desc.MinLOD = 0.f;
         desc.MaxLOD = 0.f;
-        bd->pd3dDevice->CreateSamplerState(&desc, &bd->pFontSampler);
+        const HRESULT samplerResult = bd->pd3dDevice->CreateSamplerState(&desc, &bd->pFontSampler);
+        if (FAILED(samplerResult) || bd->pFontSampler == nullptr)
+        {
+            io.Fonts->SetTexID(nullptr);
+            if (bd->pFontTextureView)
+            {
+                bd->pFontTextureView->Release();
+                bd->pFontTextureView = nullptr;
+            }
+            return false;
+        }
     }
+    return true;
 }
 
 bool    ImGui_ImplDX11_CreateDeviceObjects()
@@ -539,7 +553,11 @@ bool    ImGui_ImplDX11_CreateDeviceObjects()
         bd->pd3dDevice->CreateDepthStencilState(&desc, &bd->pDepthStencilState);
     }
 
-    ImGui_ImplDX11_CreateFontsTexture();
+    if (!ImGui_ImplDX11_CreateFontsTexture())
+    {
+        ImGui_ImplDX11_InvalidateDeviceObjects();
+        return false;
+    }
 
     return true;
 }
