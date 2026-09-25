@@ -34,6 +34,8 @@ private:
 	static constexpr UINT kTrayMessage = WM_APP + 0x20;
 	static constexpr UINT kHotkeyId = 1;
 	static constexpr UINT kOverlayHotkeyId = 2;
+	static constexpr UINT kOverlayScrollDownHotkeyId = 3;
+	static constexpr UINT kOverlayScrollUpHotkeyId = 4;
 	static constexpr UINT kTrayIconId = 1;
 
 	bool CreateMainWindow(HINSTANCE instance) noexcept;
@@ -62,6 +64,10 @@ private:
 	bool ApplyOverlayHotkey(
 		const CaptureHotkeySettings& hotkey, std::string& error) noexcept;
 	void UnregisterOverlayHotkey() noexcept;
+	bool ApplyOverlayScrollHotkey(const CaptureHotkeySettings& hotkey,
+		bool scrollDown, std::string& error) noexcept;
+	void UnregisterOverlayScrollHotkeys() noexcept;
+	void ScrollOverlayAnswer(int direction) noexcept;
 	void ReloadHubFonts() noexcept;
 	void ScanMissingAnswerGlyphs() noexcept;
 	void TriggerCapture() noexcept;
@@ -111,8 +117,14 @@ private:
 	std::array<char, 1024> overlayDllPathField_ = {};
 	CaptureHotkeySettings captureHotkeyField_;
 	CaptureHotkeySettings overlayHotkeyField_;
+	CaptureHotkeySettings overlayScrollDownHotkeyField_;
+	CaptureHotkeySettings overlayScrollUpHotkeyField_;
 	CaptureHotkeySettings registeredOverlayHotkey_;
 	bool overlayHotkeyRegistered_ = false;
+	CaptureHotkeySettings registeredOverlayScrollDownHotkey_;
+	CaptureHotkeySettings registeredOverlayScrollUpHotkey_;
+	bool overlayScrollDownHotkeyRegistered_ = false;
+	bool overlayScrollUpHotkeyRegistered_ = false;
 	ImFont* fontRegular_ = nullptr;
 	ImFont* fontTitle_ = nullptr;
 	ImFont* fontCode_ = nullptr;

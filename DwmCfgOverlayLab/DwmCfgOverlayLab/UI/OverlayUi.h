@@ -20,10 +20,11 @@ public:
 	void SetFonts(ImFont* regular, ImFont* bold, ImFont* code) noexcept;
 	// Dark glass look: translucent window over the live desktop composition.
 	void ApplyStyle() noexcept;
-	UiFrameResult Build(const UiSnapshot& snapshot, IAnswerProvider* answers) noexcept;
+	UiFrameResult Build(const UiSnapshot& snapshot, IAnswerProvider* answers,
+		int answerScrollSteps) noexcept;
 
 private:
-	void BuildAnswerSection(IAnswerProvider* answers) noexcept;
+	void BuildAnswerSection(IAnswerProvider* answers, int scrollSteps) noexcept;
 	void RenderMarkdown(const char* text) noexcept;
 	void RenderBlockLines(const char* begin, const char* end) noexcept;
 	void RenderCodeBlock(const char* begin, const char* end) noexcept;

@@ -189,6 +189,36 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 			if (virtualKey > 0 && virtualKey <= 0xFF)
 				settings.overlayToggleHotkey.virtualKey = virtualKey;
 		}
+		if (const auto hotkey = document.find("overlayScrollDownHotkey");
+			hotkey != document.end() && hotkey->is_object()) {
+			settings.overlayScrollDownHotkey.control = hotkey->value(
+				"control", settings.overlayScrollDownHotkey.control);
+			settings.overlayScrollDownHotkey.alt = hotkey->value(
+				"alt", settings.overlayScrollDownHotkey.alt);
+			settings.overlayScrollDownHotkey.shift = hotkey->value(
+				"shift", settings.overlayScrollDownHotkey.shift);
+			settings.overlayScrollDownHotkey.windows = hotkey->value(
+				"windows", settings.overlayScrollDownHotkey.windows);
+			const auto virtualKey = hotkey->value(
+				"virtualKey", settings.overlayScrollDownHotkey.virtualKey);
+			if (virtualKey > 0 && virtualKey <= 0xFF)
+				settings.overlayScrollDownHotkey.virtualKey = virtualKey;
+		}
+		if (const auto hotkey = document.find("overlayScrollUpHotkey");
+			hotkey != document.end() && hotkey->is_object()) {
+			settings.overlayScrollUpHotkey.control = hotkey->value(
+				"control", settings.overlayScrollUpHotkey.control);
+			settings.overlayScrollUpHotkey.alt = hotkey->value(
+				"alt", settings.overlayScrollUpHotkey.alt);
+			settings.overlayScrollUpHotkey.shift = hotkey->value(
+				"shift", settings.overlayScrollUpHotkey.shift);
+			settings.overlayScrollUpHotkey.windows = hotkey->value(
+				"windows", settings.overlayScrollUpHotkey.windows);
+			const auto virtualKey = hotkey->value(
+				"virtualKey", settings.overlayScrollUpHotkey.virtualKey);
+			if (virtualKey > 0 && virtualKey <= 0xFF)
+				settings.overlayScrollUpHotkey.virtualKey = virtualKey;
+		}
 		const std::string protectedKey = document.value("apiKeyProtected", "");
 		settings.apiKey = Unprotect(protectedKey);
 		if (!protectedKey.empty() && settings.apiKey.empty()) {
@@ -214,7 +244,7 @@ bool SettingsStore::Save(
 			return false;
 		}
 		const json document = {
-			{ "version", 7 },
+			{ "version", 8 },
 			{ "apiBaseUrl", settings.apiBaseUrl },
 			{ "apiKeyProtected", protectedKey },
 			{ "model", settings.model },
@@ -234,6 +264,20 @@ bool SettingsStore::Save(
 				{ "shift", settings.overlayToggleHotkey.shift },
 				{ "windows", settings.overlayToggleHotkey.windows },
 				{ "virtualKey", settings.overlayToggleHotkey.virtualKey }
+			} },
+			{ "overlayScrollDownHotkey", {
+				{ "control", settings.overlayScrollDownHotkey.control },
+				{ "alt", settings.overlayScrollDownHotkey.alt },
+				{ "shift", settings.overlayScrollDownHotkey.shift },
+				{ "windows", settings.overlayScrollDownHotkey.windows },
+				{ "virtualKey", settings.overlayScrollDownHotkey.virtualKey }
+			} },
+			{ "overlayScrollUpHotkey", {
+				{ "control", settings.overlayScrollUpHotkey.control },
+				{ "alt", settings.overlayScrollUpHotkey.alt },
+				{ "shift", settings.overlayScrollUpHotkey.shift },
+				{ "windows", settings.overlayScrollUpHotkey.windows },
+				{ "virtualKey", settings.overlayScrollUpHotkey.virtualKey }
 			} }
 		};
 		const auto temporary = path_.wstring() + L".tmp";

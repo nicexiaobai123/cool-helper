@@ -20,6 +20,9 @@ inline constexpr wchar_t kControlSectionName[] = L"Local\\CoolHelper.Overlay.Con
 inline constexpr wchar_t kControlReadyEventName[] = L"Local\\CoolHelper.Overlay.Control.Ready.v1";
 
 constexpr UINT32 kControlCommandSetOverlayVisible = 1; // value: 1=show, 0=hide
+constexpr UINT32 kControlCommandScrollAnswer = 2;
+constexpr UINT32 kControlScrollUp = 0;
+constexpr UINT32 kControlScrollDown = 1;
 
 #pragma pack(push, 8)
 struct ControlSharedHeader {
@@ -76,9 +79,11 @@ public:
 	int QueryOverlayVisible() const noexcept;
 
 	bool SendSetOverlayVisible(bool visible) noexcept;
+	bool SendScrollAnswer(int direction) noexcept;
 
 private:
 	static bool HeartbeatFresh(UINT64 tick) noexcept;
+	bool SendCommand(UINT32 type, UINT32 value) noexcept;
 
 	bool running_ = false;
 	HANDLE readyEvent_ = nullptr;

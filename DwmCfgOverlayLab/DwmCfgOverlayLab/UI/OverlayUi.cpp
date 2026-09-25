@@ -353,7 +353,8 @@ void OverlayUi::ApplyStyle() noexcept {
 }
 
 UiFrameResult OverlayUi::Build(
-	const UiSnapshot& snapshot, IAnswerProvider* answers) noexcept {
+	const UiSnapshot& snapshot, IAnswerProvider* answers,
+	int answerScrollSteps) noexcept {
 	UiFrameResult result = {};
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	const ImVec2 work = viewport->WorkSize;
@@ -380,7 +381,7 @@ UiFrameResult OverlayUi::Build(
 	}
 
 	if (answers)
-		BuildAnswerSection(answers);
+		BuildAnswerSection(answers, answerScrollSteps);
 
 	result.windowPosition = ImGui::GetWindowPos();
 	result.windowSize = ImGui::GetWindowSize();
@@ -388,7 +389,8 @@ UiFrameResult OverlayUi::Build(
 	return result;
 }
 
-void OverlayUi::BuildAnswerSection(IAnswerProvider* answers) noexcept {
+void OverlayUi::BuildAnswerSection(
+	IAnswerProvider* answers, int scrollSteps) noexcept {
 	const AnswerState state = answers->GetAnswerState();
 	switch (state) {
 	case AnswerState::Streaming:
@@ -456,7 +458,13 @@ void OverlayUi::BuildAnswerSection(IAnswerProvider* answers) noexcept {
 			"\u622a\u56fe\u63d0\u95ee\u540e\uff0cAI \u56de\u7b54\u5c06\u4f1a\u5728\u8fd9\u91cc\u5b9e\u65f6\u663e\u793a");
 	}
 
-	if (streaming && atBottom)
+	if (scrollSteps != 0) {
+		// Three text rows matches the common Windows mouse-wheel setting and
+		// remains predictable across DPI and font-size changes.
+		const float step = ImGui::GetTextLineHeightWithSpacing() * 3.0f;
+		ImGui::SetScrollY(ImGui::GetScrollY() + step * scrollSteps);
+	}
+	else if (streaming && atBottom)
 		ImGui::SetScrollHereY(1.0f);
 	ImGui::EndChild();
 }

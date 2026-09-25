@@ -37,7 +37,8 @@ constexpr char kStaticUiGlyphSeed[] =
 	"全局快捷键截图并提问切换显示隐藏当前保存后生效配置文件路径恢复默认"
 	"注入卸载状态进程已未找到连接中未知控制刷新安全管理员权限成功失败错误"
 	"请输入模型地址密钥使用仅能当前用户解密完成停止清空复制内容等待接收"
-	"字体字形窗口工具栏主题选项开关常见设置支持快捷组合按键覆盖显示层";
+	"字体字形窗口工具栏主题选项开关常见设置支持快捷组合按键覆盖显示层"
+	"答案向上下滚动";
 
 struct HotkeyOption {
 	const char* name;
@@ -55,6 +56,8 @@ constexpr HotkeyOption kHotkeyOptions[] = {
 	{ "0", '0' }, { "1", '1' }, { "2", '2' }, { "3", '3' },
 	{ "4", '4' }, { "5", '5' }, { "6", '6' }, { "7", '7' },
 	{ "8", '8' }, { "9", '9' },
+	{ "+", VK_OEM_PLUS }, { "-", VK_OEM_MINUS },
+	{ "Num +", VK_ADD }, { "Num -", VK_SUBTRACT },
 	{ "F1", VK_F1 }, { "F2", VK_F2 }, { "F3", VK_F3 },
 	{ "F4", VK_F4 }, { "F5", VK_F5 }, { "F6", VK_F6 },
 	{ "F7", VK_F7 }, { "F8", VK_F8 }, { "F9", VK_F9 },
@@ -1027,6 +1030,13 @@ int App::Run(HINSTANCE instance, int showCommand) noexcept {
 	std::string overlayHotkeyError;
 	if (!ApplyOverlayHotkey(settings_.overlayToggleHotkey, overlayHotkeyError))
 		Logger::Write(LogLevel::Warning, overlayHotkeyError.c_str());
+	std::string scrollHotkeyError;
+	if (!ApplyOverlayScrollHotkey(
+		settings_.overlayScrollDownHotkey, true, scrollHotkeyError))
+		Logger::Write(LogLevel::Warning, scrollHotkeyError.c_str());
+	if (!ApplyOverlayScrollHotkey(
+		settings_.overlayScrollUpHotkey, false, scrollHotkeyError))
+		Logger::Write(LogLevel::Warning, scrollHotkeyError.c_str());
 
 	// Everything is ready; only now make the window visible.
 	ShowWindow(window_, showCommand == SW_HIDE ? SW_SHOWNORMAL : showCommand);
@@ -1057,7 +1067,8 @@ int App::Run(HINSTANCE instance, int showCommand) noexcept {
 
 	Logger::Write(LogLevel::Info, "CoolHelperHub shutting down");
 	aiClient_.Cancel();
-	UnregisterHotKey(window_, kOverlayHotkeyId);
+	UnregisterOverlayScrollHotkeys();
+	UnregisterOverlayHotkey();
 	UnregisterCaptureHotkey();
 	RemoveTrayIcon();
 	answerSink_.SetWindow(nullptr);
@@ -1498,6 +1509,10 @@ void App::RenderSettingsPage() noexcept {
 		};
 		hotkeyRow("captureHotkey", "截图并提问", captureHotkeyField_);
 		hotkeyRow("overlayHotkey", "切换覆盖层显示", overlayHotkeyField_);
+		hotkeyRow("overlayScrollDownHotkey", "覆盖层答案向下滚动",
+			overlayScrollDownHotkeyField_);
+		hotkeyRow("overlayScrollUpHotkey", "覆盖层答案向上滚动",
+			overlayScrollUpHotkeyField_);
 		ImGui::TextDisabled("修改快捷键后，点击下方“保存设置”使其生效。");
 	}
 	ImGui::EndChild();
@@ -1757,6 +1772,8 @@ void App::CopySettingsToFields() noexcept {
 	CopyField(userPromptField_, settings_.userPrompt);
 	captureHotkeyField_ = settings_.captureHotkey;
 	overlayHotkeyField_ = settings_.overlayToggleHotkey;
+	overlayScrollDownHotkeyField_ = settings_.overlayScrollDownHotkey;
+	overlayScrollUpHotkeyField_ = settings_.overlayScrollUpHotkey;
 }
 
 void App::SaveSettingsFromFields() noexcept {
@@ -1768,28 +1785,48 @@ void App::SaveSettingsFromFields() noexcept {
 	updated.userPrompt = userPromptField_.data();
 	updated.captureHotkey = captureHotkeyField_;
 	updated.overlayToggleHotkey = overlayHotkeyField_;
+	updated.overlayScrollDownHotkey = overlayScrollDownHotkeyField_;
+	updated.overlayScrollUpHotkey = overlayScrollUpHotkeyField_;
+	const AppSettings previous = settings_;
+	const auto restoreHotkeys = [this, &previous]() {
+		std::string ignored;
+		ApplyCaptureHotkey(previous.captureHotkey, ignored);
+		ApplyOverlayHotkey(previous.overlayToggleHotkey, ignored);
+		ApplyOverlayScrollHotkey(
+			previous.overlayScrollDownHotkey, true, ignored);
+		ApplyOverlayScrollHotkey(
+			previous.overlayScrollUpHotkey, false, ignored);
+	};
 	std::string error;
 	if (!ApplyCaptureHotkey(updated.captureHotkey, error)) {
 		settingsStatus_ = error;
 		return;
 	}
 	if (!ApplyOverlayHotkey(updated.overlayToggleHotkey, error)) {
+		restoreHotkeys();
+		settingsStatus_ = error;
+		return;
+	}
+	if (!ApplyOverlayScrollHotkey(
+		updated.overlayScrollDownHotkey, true, error)) {
+		restoreHotkeys();
+		settingsStatus_ = error;
+		return;
+	}
+	if (!ApplyOverlayScrollHotkey(
+		updated.overlayScrollUpHotkey, false, error)) {
+		restoreHotkeys();
 		settingsStatus_ = error;
 		return;
 	}
 
-	const CaptureHotkeySettings previousHotkey = settings_.captureHotkey;
-	const CaptureHotkeySettings previousOverlayHotkey =
-		settings_.overlayToggleHotkey;
 	if (settingsStore_.Save(updated, error)) {
 		settings_ = std::move(updated);
 		settingsStatus_ = "保存成功，快捷键已生效";
 		Logger::Write(LogLevel::Info, "Settings saved");
 	}
 	else {
-		std::string restoreError;
-		ApplyCaptureHotkey(previousHotkey, restoreError);
-		ApplyOverlayHotkey(previousOverlayHotkey, restoreError);
+		restoreHotkeys();
 		settingsStatus_ = error;
 		Logger::Write(LogLevel::Error, "Settings save failed");
 	}
@@ -1887,6 +1924,72 @@ void App::UnregisterOverlayHotkey() noexcept {
 		return;
 	UnregisterHotKey(window_, kOverlayHotkeyId);
 	overlayHotkeyRegistered_ = false;
+}
+
+bool App::ApplyOverlayScrollHotkey(const CaptureHotkeySettings& hotkey,
+	bool scrollDown, std::string& error) noexcept {
+	if (IsOrdinaryUnmodifiedKey(hotkey)) {
+		error = "覆盖层滚动快捷键需要至少选择 Ctrl、Alt、Shift 或 Win";
+		return false;
+	}
+	const UINT id = scrollDown
+		? kOverlayScrollDownHotkeyId : kOverlayScrollUpHotkeyId;
+	bool& registered = scrollDown
+		? overlayScrollDownHotkeyRegistered_ : overlayScrollUpHotkeyRegistered_;
+	CaptureHotkeySettings& current = scrollDown
+		? registeredOverlayScrollDownHotkey_ : registeredOverlayScrollUpHotkey_;
+	if (registered &&
+		hotkey.control == current.control && hotkey.alt == current.alt &&
+		hotkey.shift == current.shift && hotkey.windows == current.windows &&
+		hotkey.virtualKey == current.virtualKey)
+		return true;
+
+	const bool hadPrevious = registered;
+	const CaptureHotkeySettings previous = current;
+	if (hadPrevious) {
+		UnregisterHotKey(window_, id);
+		registered = false;
+	}
+	if (RegisterHotKey(window_, id,
+		NativeHotkeyModifiers(hotkey), hotkey.virtualKey)) {
+		current = hotkey;
+		registered = true;
+		Logger::Write(LogLevel::Info, scrollDown
+			? "Overlay scroll-down hotkey registered"
+			: "Overlay scroll-up hotkey registered");
+		return true;
+	}
+	if (hadPrevious && RegisterHotKey(window_, id,
+		NativeHotkeyModifiers(previous), previous.virtualKey)) {
+		current = previous;
+		registered = true;
+	}
+	error = std::string(scrollDown ? "覆盖层向下滚动快捷键 " :
+		"覆盖层向上滚动快捷键 ") + HotkeyText(hotkey) +
+		" 注册失败，可能已被其他程序占用";
+	Logger::Write(LogLevel::Warning, scrollDown
+		? "Overlay scroll-down hotkey registration failed"
+		: "Overlay scroll-up hotkey registration failed");
+	return false;
+}
+
+void App::UnregisterOverlayScrollHotkeys() noexcept {
+	if (!window_)
+		return;
+	if (overlayScrollDownHotkeyRegistered_) {
+		UnregisterHotKey(window_, kOverlayScrollDownHotkeyId);
+		overlayScrollDownHotkeyRegistered_ = false;
+	}
+	if (overlayScrollUpHotkeyRegistered_) {
+		UnregisterHotKey(window_, kOverlayScrollUpHotkeyId);
+		overlayScrollUpHotkeyRegistered_ = false;
+	}
+}
+
+void App::ScrollOverlayAnswer(int direction) noexcept {
+	// A disconnected or hidden overlay simply ignores the command. In
+	// particular, a tray-resident hub must not surface its window on failure.
+	overlayControl_.SendScrollAnswer(direction);
 }
 
 void App::TriggerCapture() noexcept {
@@ -2069,6 +2172,10 @@ LRESULT App::HandleMessage(
 			TriggerCapture();
 		else if (wParam == kOverlayHotkeyId)
 			ToggleOverlayVisible();
+		else if (wParam == kOverlayScrollDownHotkeyId)
+			ScrollOverlayAnswer(1);
+		else if (wParam == kOverlayScrollUpHotkeyId)
+			ScrollOverlayAnswer(-1);
 		return 0;
 	case WM_COMMAND:
 		switch (LOWORD(wParam)) {

@@ -140,6 +140,19 @@ int OverlayControlChannel::QueryOverlayVisible() const noexcept {
 }
 
 bool OverlayControlChannel::SendSetOverlayVisible(bool visible) noexcept {
+	return SendCommand(overlaycontrol::kControlCommandSetOverlayVisible,
+		visible ? 1u : 0u);
+}
+
+bool OverlayControlChannel::SendScrollAnswer(int direction) noexcept {
+	if (direction == 0)
+		return true;
+	return SendCommand(overlaycontrol::kControlCommandScrollAnswer,
+		direction > 0 ? overlaycontrol::kControlScrollDown
+			: overlaycontrol::kControlScrollUp);
+}
+
+bool OverlayControlChannel::SendCommand(UINT32 type, UINT32 value) noexcept {
 	ControlSharedHeader* header = header_;
 	if (!running_ || !header)
 		return false;
@@ -161,8 +174,8 @@ bool OverlayControlChannel::SendSetOverlayVisible(bool visible) noexcept {
 		(write & (overlaycontrol::kControlSlotCount - 1)) *
 			overlaycontrol::kControlSlotSize;
 	auto* message = reinterpret_cast<overlaycontrol::ControlCommandMessage*>(slot);
-	message->type = overlaycontrol::kControlCommandSetOverlayVisible;
-	message->value = visible ? 1 : 0;
+	message->type = type;
+	message->value = value;
 	message->sequence = ++sequence_;
 	message->reserved = 0;
 	MemoryBarrier();

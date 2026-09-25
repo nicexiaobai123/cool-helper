@@ -25,6 +25,10 @@ int main() {
 	expected.captureHotkey.shift = true;
 	expected.captureHotkey.windows = false;
 	expected.captureHotkey.virtualKey = VK_F8;
+	expected.overlayScrollDownHotkey.shift = true;
+	expected.overlayScrollDownHotkey.virtualKey = VK_ADD;
+	expected.overlayScrollUpHotkey.windows = true;
+	expected.overlayScrollUpHotkey.virtualKey = VK_SUBTRACT;
 
 	coolhelper::SettingsStore store(path);
 	std::string error;
@@ -49,7 +53,15 @@ int main() {
 		actual.captureHotkey.alt == expected.captureHotkey.alt &&
 		actual.captureHotkey.shift == expected.captureHotkey.shift &&
 		actual.captureHotkey.windows == expected.captureHotkey.windows &&
-		actual.captureHotkey.virtualKey == expected.captureHotkey.virtualKey;
+		actual.captureHotkey.virtualKey == expected.captureHotkey.virtualKey &&
+		actual.overlayScrollDownHotkey.shift ==
+			expected.overlayScrollDownHotkey.shift &&
+		actual.overlayScrollDownHotkey.virtualKey ==
+			expected.overlayScrollDownHotkey.virtualKey &&
+		actual.overlayScrollUpHotkey.windows ==
+			expected.overlayScrollUpHotkey.windows &&
+		actual.overlayScrollUpHotkey.virtualKey ==
+			expected.overlayScrollUpHotkey.virtualKey;
 
 	// Settings saved by earlier releases should receive the interview preset,
 	// while custom prompts above remain untouched.
@@ -67,7 +79,13 @@ int main() {
 		migrated.userPrompt == coolhelper::kDefaultInterviewUserPrompt &&
 		migrated.systemPrompt.find("C++17") != std::string::npos &&
 		migrated.userPrompt.find("C++11") != std::string::npos &&
-		migrated.systemPrompt.find("C++20 实现") == std::string::npos;
+		migrated.systemPrompt.find("C++20 实现") == std::string::npos &&
+		migrated.overlayScrollDownHotkey.control &&
+		migrated.overlayScrollDownHotkey.alt &&
+		migrated.overlayScrollDownHotkey.virtualKey == VK_OEM_PLUS &&
+		migrated.overlayScrollUpHotkey.control &&
+		migrated.overlayScrollUpHotkey.alt &&
+		migrated.overlayScrollUpHotkey.virtualKey == VK_OEM_MINUS;
 
 	DeleteFileW(path.c_str());
 	if (!passed)

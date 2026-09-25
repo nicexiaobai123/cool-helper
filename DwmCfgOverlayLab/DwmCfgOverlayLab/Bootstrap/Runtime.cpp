@@ -18,6 +18,10 @@ void Runtime::OnControlCommand(
 		return;
 	if (type == kControlCommandSetOverlayVisible)
 		runtime->renderer_.SetOverlayVisible(value != 0);
+	else if (type == kControlCommandScrollAnswer &&
+		(value == kControlScrollUp || value == kControlScrollDown))
+		runtime->renderer_.RequestAnswerScroll(
+			value == kControlScrollDown ? 1 : -1);
 }
 
 bool Runtime::QueryOverlayVisible(void* context) noexcept {

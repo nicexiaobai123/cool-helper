@@ -28,6 +28,9 @@ public:
 	// by invalidating the region once; show simply resumes rendering.
 	void SetOverlayVisible(bool visible) noexcept;
 	bool IsOverlayVisible() const noexcept;
+	// May be called by the control IPC worker. The render thread consumes the
+	// accumulated steps before building the next ImGui frame.
+	void RequestAnswerScroll(int direction) noexcept;
 	UiStateStore& StateStore() noexcept { return uiState_; }
 	void SetAnswerProvider(IAnswerProvider* provider) noexcept {
 		answerProvider_ = provider;
@@ -60,6 +63,7 @@ private:
 	volatile LONG destroyed_ = 0;
 	volatile LONG sourceLogMask_ = 0;
 	volatile LONG overlayVisible_ = 1;
+	volatile LONG pendingAnswerScrollSteps_ = 0;
 	Microsoft::WRL::ComPtr<ID3D11Device> device_;
 	Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
 	LONGLONG qpcFrequency_ = 0;

@@ -64,6 +64,10 @@ struct AppSettings {
 	CaptureHotkeySettings captureHotkey;
 	CaptureHotkeySettings overlayToggleHotkey{
 		.control = true, .alt = true, .virtualKey = 'H'};
+	CaptureHotkeySettings overlayScrollDownHotkey{
+		.control = true, .alt = true, .virtualKey = 0xBBu}; // VK_OEM_PLUS
+	CaptureHotkeySettings overlayScrollUpHotkey{
+		.control = true, .alt = true, .virtualKey = 0xBDu}; // VK_OEM_MINUS
 	// Empty means "<exe directory>\DwmCfgOverlayLab.dll".
 	std::string overlayDllPath;
 };

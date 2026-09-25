@@ -17,6 +17,9 @@ constexpr wchar_t kControlSectionName[] = L"Local\\CoolHelper.Overlay.Control.v1
 constexpr wchar_t kControlReadyEventName[] = L"Local\\CoolHelper.Overlay.Control.Ready.v1";
 
 constexpr UINT32 kControlCommandSetOverlayVisible = 1; // value: 1=show, 0=hide
+constexpr UINT32 kControlCommandScrollAnswer = 2;
+constexpr UINT32 kControlScrollUp = 0;
+constexpr UINT32 kControlScrollDown = 1;
 
 #pragma pack(push, 8)
 struct ControlSharedHeader {

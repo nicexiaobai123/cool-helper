@@ -78,6 +78,11 @@ bool OverlayRenderer::IsOverlayVisible() const noexcept {
 		const_cast<volatile LONG*>(&overlayVisible_), 0, 0) != 0;
 }
 
+void OverlayRenderer::RequestAnswerScroll(int direction) noexcept {
+	if (direction != 0)
+		InterlockedExchangeAdd(&pendingAnswerScrollSteps_, direction > 0 ? 1 : -1);
+}
+
 bool OverlayRenderer::AcquireCurrentBackBuffer(
 	IDXGISwapChain* swapChain,
 	ComPtr<ID3D11Texture2D>& texture,
@@ -383,7 +388,10 @@ void OverlayRenderer::RenderFrame(
 			static_cast<float>(backBufferDescription.Height));
 		ImGui::NewFrame();
 
-		const UiFrameResult uiResult = ui_.Build(uiState_.Read(), answerProvider_);
+		const int scrollSteps = static_cast<int>(
+			InterlockedExchange(&pendingAnswerScrollSteps_, 0));
+		const UiFrameResult uiResult = ui_.Build(
+			uiState_.Read(), answerProvider_, scrollSteps);
 		ImGui::Render();
 		hasCachedOverlayRect_ = GetOverlayBounds(
 			uiResult.windowPosition, uiResult.windowSize,
