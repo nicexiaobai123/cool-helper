@@ -28,6 +28,17 @@ namespace {
 constexpr UINT kTrayShow = 1001;
 constexpr UINT kTrayExit = 1003;
 
+// The initial simplified-Chinese range is intentionally compact, but it does
+// not include every character used by the UI (for example "综").  Keep a
+// small, explicit seed for static UI text; streamed answer text is still
+// backfilled dynamically by ScanMissingAnswerGlyphs().
+constexpr char kStaticUiGlyphSeed[] =
+	"面试截图助手答案设置覆盖层接口配置提示词预设综合算法题系统问题"
+	"全局快捷键截图并提问切换显示隐藏当前保存后生效配置文件路径恢复默认"
+	"注入卸载状态进程已未找到连接中未知控制刷新安全管理员权限成功失败错误"
+	"请输入模型地址密钥使用仅能当前用户解密完成停止清空复制内容等待接收"
+	"字体字形窗口工具栏主题选项开关常见设置支持快捷组合按键覆盖显示层";
+
 struct HotkeyOption {
 	const char* name;
 	UINT virtualKey;
@@ -266,8 +277,15 @@ void NoticeBox(const char* id, std::string_view text, const ImVec4& color) noexc
 void RightDisabledText(std::string_view text) noexcept {
 	const float width = ImGui::CalcTextSize(
 		text.data(), text.data() + text.size()).x;
-	const float x = ImGui::GetCursorPosX() +
-		ImGui::GetContentRegionAvail().x - width;
+	const float currentX = ImGui::GetCursorPosX();
+	const float x = currentX + ImGui::GetContentRegionAvail().x - width;
+	if (x <= currentX + ImGui::GetStyle().ItemSpacing.x) {
+		// A narrow or high-DPI window cannot hold this status text beside the
+		// title.  Give it its own line instead of drawing over the title.
+		ImGui::NewLine();
+		ImGui::TextWrapped("%.*s", static_cast<int>(text.size()), text.data());
+		return;
+	}
 	ImGui::SameLine(x);
 	ImGui::TextDisabled("%.*s", static_cast<int>(text.size()), text.data());
 }
@@ -1141,6 +1159,16 @@ void App::InitializeImGui() noexcept {
 	ImGuiIO& io = ImGui::GetIO();
 	io.IniFilename = nullptr;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+	// Persist the glyph-range storage for the whole ImGui lifetime.  The font
+	// backend consumes it after this function returns, so a local range array
+	// would be unsafe here.
+	ImFontGlyphRangesBuilder glyphBuilder;
+	glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+	glyphBuilder.AddText(kStaticUiGlyphSeed);
+	ImVector<ImWchar> staticGlyphRanges;
+	glyphBuilder.BuildRanges(&staticGlyphRanges);
+	extraGlyphRanges_.assign(staticGlyphRanges.Data,
+		staticGlyphRanges.Data + staticGlyphRanges.Size);
 	ReloadHubFonts();
 	ApplyHubTheme();
 	ImGui_ImplWin32_Init(window_);
@@ -1301,12 +1329,12 @@ void App::RenderFrame() noexcept {
 			RenderAnswerPage();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem("设置")) {
-			RenderSettingsPage();
-			ImGui::EndTabItem();
-		}
 		if (ImGui::BeginTabItem("DWM 覆盖层")) {
 			RenderDwmPage();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("设置")) {
+			RenderSettingsPage();
 			ImGui::EndTabItem();
 		}
 		ImGui::EndTabBar();
@@ -1442,8 +1470,9 @@ void App::RenderSettingsPage() noexcept {
 		const auto hotkeyRow = [](const char* id, const char* label,
 			CaptureHotkeySettings& hotkey) {
 			ImGui::TextUnformatted(label);
-			ImGui::SameLine(110.0f);
 			ImGui::PushID(id);
+			// Keep the explanatory text below the controls.  The previous single
+			// fixed-width row clipped it at smaller resolutions and high DPI.
 			ImGui::Checkbox("Ctrl", &hotkey.control);
 			ImGui::SameLine();
 			ImGui::Checkbox("Alt", &hotkey.alt);
@@ -1464,12 +1493,12 @@ void App::RenderSettingsPage() noexcept {
 				}
 				ImGui::EndCombo();
 			}
-			ImGui::SameLine();
-			ImGui::TextDisabled("保存后生效：%s", HotkeyText(hotkey).c_str());
 			ImGui::PopID();
+			ImGui::Spacing();
 		};
 		hotkeyRow("captureHotkey", "截图并提问", captureHotkeyField_);
 		hotkeyRow("overlayHotkey", "切换覆盖层显示", overlayHotkeyField_);
+		ImGui::TextDisabled("修改快捷键后，点击下方“保存设置”使其生效。");
 	}
 	ImGui::EndChild();
 	ImGui::EndChild();
