@@ -28,10 +28,8 @@ namespace {
 constexpr UINT kTrayShow = 1001;
 constexpr UINT kTrayExit = 1003;
 
-// The initial simplified-Chinese range is intentionally compact, but it does
-// not include every character used by the UI (for example "综").  Keep a
-// small, explicit seed for static UI text; streamed answer text is still
-// backfilled dynamically by ScanMissingAnswerGlyphs().
+// Exact static UI text also contributes punctuation and symbols outside the
+// core CJK range. Streamed answer text is backfilled dynamically as needed.
 constexpr char kStaticUiGlyphSeed[] =
 	"面试截图助手答案设置覆盖层接口配置提示词预设综合算法题系统问题"
 	"全局快捷键截图并提问切换显示隐藏当前保存后生效配置文件路径恢复默认"
@@ -39,6 +37,20 @@ constexpr char kStaticUiGlyphSeed[] =
 	"请输入模型地址密钥使用仅能当前用户解密完成停止清空复制内容等待接收"
 	"字体字形窗口工具栏主题选项开关常见设置支持快捷组合按键覆盖显示层"
 	"答案向上下滚动";
+
+constexpr ImWchar kSymbolGlyphRanges[] = {
+	0x2000, 0x2BFF, // punctuation, arrows, math operators and common symbols
+	0
+};
+
+void MergeSymbolFont(ImFontAtlas* fonts, float size) noexcept {
+	ImFontConfig config = {};
+	config.MergeMode = true;
+	config.OversampleH = 2;
+	config.OversampleV = 2;
+	fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisym.ttf",
+		size, &config, kSymbolGlyphRanges);
+}
 
 struct HotkeyOption {
 	const char* name;
@@ -276,6 +288,41 @@ void NoticeBox(const char* id, std::string_view text, const ImVec4& color) noexc
 	ImGui::PopStyleColor(2);
 }
 
+void DisabledTextWrapped(std::string_view text) noexcept {
+	ImGui::PushStyleColor(ImGuiCol_Text,
+		ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+	ImGui::TextWrapped("%.*s", static_cast<int>(text.size()), text.data());
+	ImGui::PopStyleColor();
+}
+
+void ColoredTextWrapped(std::string_view text, const ImVec4& color) noexcept {
+	ImGui::PushStyleColor(ImGuiCol_Text, color);
+	ImGui::TextWrapped("%.*s", static_cast<int>(text.size()), text.data());
+	ImGui::PopStyleColor();
+}
+
+float ActionButtonWidth(const char* label) noexcept {
+	return ImGui::CalcTextSize(label).x + kButtonPadding.x * 2.0f;
+}
+
+void SameLineIfFits(float nextItemWidth) noexcept {
+	const float right = ImGui::GetWindowPos().x +
+		ImGui::GetWindowContentRegionMax().x;
+	const float nextRight = ImGui::GetItemRectMax().x +
+		ImGui::GetStyle().ItemSpacing.x + nextItemWidth;
+	if (nextRight <= right)
+		ImGui::SameLine();
+}
+
+void SameLineForButtonIfFits(const char* nextLabel) noexcept {
+	SameLineIfFits(ActionButtonWidth(nextLabel));
+}
+
+float CheckboxWidth(const char* label) noexcept {
+	return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x +
+		ImGui::CalcTextSize(label).x;
+}
+
 // Disabled text pushed to the right edge of the current row.
 void RightDisabledText(std::string_view text) noexcept {
 	const float width = ImGui::CalcTextSize(
@@ -286,7 +333,7 @@ void RightDisabledText(std::string_view text) noexcept {
 		// A narrow or high-DPI window cannot hold this status text beside the
 		// title.  Give it its own line instead of drawing over the title.
 		ImGui::NewLine();
-		ImGui::TextWrapped("%.*s", static_cast<int>(text.size()), text.data());
+		DisabledTextWrapped(text);
 		return;
 	}
 	ImGui::SameLine(x);
@@ -1170,11 +1217,11 @@ void App::InitializeImGui() noexcept {
 	ImGuiIO& io = ImGui::GetIO();
 	io.IniFilename = nullptr;
 	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-	// Persist the glyph-range storage for the whole ImGui lifetime.  The font
-	// backend consumes it after this function returns, so a local range array
-	// would be unsafe here.
+	// Bake the complete Chinese range for static UI text. Maintaining a manual
+	// list caused newly added labels to render as '?'. The range storage must
+	// persist because the backend consumes it after this function returns.
 	ImFontGlyphRangesBuilder glyphBuilder;
-	glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+	glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseFull());
 	glyphBuilder.AddText(kStaticUiGlyphSeed);
 	ImVector<ImWchar> staticGlyphRanges;
 	glyphBuilder.BuildRanges(&staticGlyphRanges);
@@ -1196,13 +1243,15 @@ void App::ReloadHubFonts() noexcept {
 	ImFontConfig bodyConfig = {};
 	bodyConfig.OversampleH = 2;
 	bodyConfig.OversampleV = 2;
-	// ChineseSimplifiedCommon keeps the initial atlas small; extraGlyphRanges_
-	// grows at runtime when the answer stream contains rarer characters.
+	// The full Chinese range guarantees that all static labels and messages are
+	// available; extraGlyphRanges_ may still grow for uncommon answer symbols.
 	const ImWchar* cjkRanges = extraGlyphRanges_.empty()
-		? io.Fonts->GetGlyphRangesChineseSimplifiedCommon()
+		? io.Fonts->GetGlyphRangesChineseFull()
 		: reinterpret_cast<const ImWchar*>(extraGlyphRanges_.data());
 	fontRegular_ = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
 		std::round(18.0f * dpiScale), &bodyConfig, cjkRanges);
+	if (fontRegular_)
+		MergeSymbolFont(io.Fonts, std::round(18.0f * dpiScale));
 	// The bold face is also used by the markdown renderer for headings and
 	// **runs**, so it carries the same CJK coverage.
 	ImFontConfig titleConfig = {};
@@ -1210,12 +1259,25 @@ void App::ReloadHubFonts() noexcept {
 	titleConfig.OversampleV = 2;
 	fontTitle_ = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyhbd.ttc",
 		std::round(19.0f * dpiScale), &titleConfig, cjkRanges);
+	if (fontTitle_)
+		MergeSymbolFont(io.Fonts, std::round(19.0f * dpiScale));
 	ImFontConfig codeConfig = {};
 	codeConfig.OversampleH = 2;
 	codeConfig.OversampleV = 2;
 	fontCode_ = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf",
 		std::round(16.0f * dpiScale), &codeConfig,
 		io.Fonts->GetGlyphRangesDefault());
+	if (fontCode_) {
+		// Consolas has no CJK glyphs. Merge YaHei so Chinese comments inside
+		// Markdown code blocks do not fall back to '?'.
+		ImFontConfig codeCjkConfig = {};
+		codeCjkConfig.MergeMode = true;
+		codeCjkConfig.OversampleH = 2;
+		codeCjkConfig.OversampleV = 2;
+		io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
+			std::round(16.0f * dpiScale), &codeCjkConfig, cjkRanges);
+		MergeSymbolFont(io.Fonts, std::round(16.0f * dpiScale));
+	}
 	if (!fontRegular_)
 		fontRegular_ = io.Fonts->AddFontDefault();
 	if (!fontTitle_ || !fontTitle_->IsLoaded())
@@ -1226,45 +1288,50 @@ void App::ReloadHubFonts() noexcept {
 }
 
 void App::ScanMissingAnswerGlyphs() noexcept {
-	if (!fontRegular_ || answer_.size() == glyphScannedUpTo_)
+	if (!fontRegular_)
 		return;
-	if (answer_.size() < glyphScannedUpTo_)
+	if (answer_.size() < glyphScannedUpTo_) {
 		glyphScannedUpTo_ = 0; // answer was cleared or replaced
-
-	const char* text = answer_.c_str();
-	const char* end = text + answer_.size();
-	const char* cursor = text + glyphScannedUpTo_;
-	while (cursor < end) {
-		unsigned codepoint = static_cast<unsigned char>(*cursor);
-		int length = 1;
-		if (codepoint >= 0x80) {
-			if ((codepoint & 0xE0) == 0xC0 && cursor + 1 < end) {
-				codepoint = ((codepoint & 0x1F) << 6) | (cursor[1] & 0x3F);
-				length = 2;
-			}
-			else if ((codepoint & 0xF0) == 0xE0 && cursor + 2 < end) {
-				codepoint = ((codepoint & 0x0F) << 12) |
-					((cursor[1] & 0x3F) << 6) | (cursor[2] & 0x3F);
-				length = 3;
-			}
-			else if ((codepoint & 0xF8) == 0xF0 && cursor + 3 < end) {
-				codepoint = ((codepoint & 0x07) << 18) |
-					((cursor[1] & 0x3F) << 12) | ((cursor[2] & 0x3F) << 6) |
-					(cursor[3] & 0x3F);
-				length = 4;
-			}
-			else {
-				break;
-			}
-		}
-		if (codepoint >= 0x80 && codepoint <= 0xFFFF &&
-			fontRegular_->FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) ==
-				nullptr) {
-			pendingMissingGlyphs_.append(cursor, static_cast<size_t>(length));
-		}
-		cursor += length;
+		pendingMissingGlyphs_.clear();
 	}
-	glyphScannedUpTo_ = answer_.size();
+
+	if (answer_.size() != glyphScannedUpTo_) {
+		const char* text = answer_.c_str();
+		const char* end = text + answer_.size();
+		const char* cursor = text + glyphScannedUpTo_;
+		while (cursor < end) {
+			unsigned codepoint = static_cast<unsigned char>(*cursor);
+			int length = 1;
+			if (codepoint >= 0x80) {
+				if ((codepoint & 0xE0) == 0xC0 && cursor + 1 < end) {
+					codepoint = ((codepoint & 0x1F) << 6) | (cursor[1] & 0x3F);
+					length = 2;
+				}
+				else if ((codepoint & 0xF0) == 0xE0 && cursor + 2 < end) {
+					codepoint = ((codepoint & 0x0F) << 12) |
+						((cursor[1] & 0x3F) << 6) | (cursor[2] & 0x3F);
+					length = 3;
+				}
+				else if ((codepoint & 0xF8) == 0xF0 && cursor + 3 < end) {
+					codepoint = ((codepoint & 0x07) << 18) |
+						((cursor[1] & 0x3F) << 12) |
+						((cursor[2] & 0x3F) << 6) | (cursor[3] & 0x3F);
+					length = 4;
+				}
+				else {
+					break; // Keep the partial UTF-8 sequence for the next frame.
+				}
+			}
+			if (codepoint >= 0x80 && codepoint <= 0xFFFF &&
+				fontRegular_->FindGlyphNoFallback(
+					static_cast<ImWchar>(codepoint)) == nullptr) {
+				pendingMissingGlyphs_.append(
+					cursor, static_cast<size_t>(length));
+			}
+			cursor += length;
+		}
+		glyphScannedUpTo_ = static_cast<std::uint64_t>(cursor - text);
+	}
 
 	if (pendingMissingGlyphs_.empty())
 		return;
@@ -1275,7 +1342,7 @@ void App::ScanMissingAnswerGlyphs() noexcept {
 
 	ImGuiIO& io = ImGui::GetIO();
 	ImFontGlyphRangesBuilder builder;
-	builder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+	builder.AddRanges(io.Fonts->GetGlyphRangesChineseFull());
 	if (!extraGlyphRanges_.empty())
 		builder.AddRanges(reinterpret_cast<const ImWchar*>(
 			extraGlyphRanges_.data()));
@@ -1427,14 +1494,13 @@ void App::RenderAnswerPage() noexcept {
 }
 
 void App::RenderSettingsPage() noexcept {
-	const float footerHeight =
-		ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-	ImGui::BeginChild("settingsScroll", ImVec2(0.0f, -footerHeight), 0, 0);
+	ImGui::BeginChild("settingsScroll", ImVec2(0.0f, 0.0f), 0, 0);
 
 	ImGui::SeparatorText("接口配置");
 	if (ImGui::BeginChild("##apiCard", ImVec2(0.0f, 0.0f),
 		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY)) {
-		ImGui::TextDisabled("API Key 使用 Windows DPAPI 加密，仅能由当前 Windows 用户解密。");
+		DisabledTextWrapped(
+			"API Key 使用 Windows DPAPI 加密，仅能由当前 Windows 用户解密。");
 		ImGui::TextUnformatted("API Base URL");
 		ImGui::SetNextItemWidth(-FLT_MIN);
 		ImGui::InputText("##apiBaseUrl", apiBaseUrlField_.data(),
@@ -1455,10 +1521,12 @@ void App::RenderSettingsPage() noexcept {
 		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY)) {
 		ImGui::TextUnformatted("System Prompt");
 		ImGui::InputTextMultiline("##systemPrompt", systemPromptField_.data(),
-			systemPromptField_.size(), ImVec2(-FLT_MIN, 125.0f));
+			systemPromptField_.size(), ImVec2(-FLT_MIN,
+				ImGui::GetTextLineHeightWithSpacing() * 8.0f));
 		ImGui::TextUnformatted("截图问题");
 		ImGui::InputTextMultiline("##userPrompt", userPromptField_.data(),
-			userPromptField_.size(), ImVec2(-FLT_MIN, 90.0f));
+			userPromptField_.size(), ImVec2(-FLT_MIN,
+				ImGui::GetTextLineHeightWithSpacing() * 6.0f));
 		ImGui::TextUnformatted("提示词预设");
 		if (SecondaryButton("综合面试")) {
 			CopyField(systemPromptField_, kDefaultInterviewSystemPrompt);
@@ -1485,14 +1553,15 @@ void App::RenderSettingsPage() noexcept {
 			// Keep the explanatory text below the controls.  The previous single
 			// fixed-width row clipped it at smaller resolutions and high DPI.
 			ImGui::Checkbox("Ctrl", &hotkey.control);
-			ImGui::SameLine();
+			SameLineIfFits(CheckboxWidth("Alt"));
 			ImGui::Checkbox("Alt", &hotkey.alt);
-			ImGui::SameLine();
+			SameLineIfFits(CheckboxWidth("Shift"));
 			ImGui::Checkbox("Shift", &hotkey.shift);
-			ImGui::SameLine();
+			SameLineIfFits(CheckboxWidth("Win"));
 			ImGui::Checkbox("Win", &hotkey.windows);
-			ImGui::SameLine();
-			ImGui::SetNextItemWidth(90.0f);
+			SameLineIfFits(90.0f);
+			ImGui::SetNextItemWidth(
+				std::min(90.0f, ImGui::GetContentRegionAvail().x));
 			if (ImGui::BeginCombo("##key", HotkeyKeyName(hotkey.virtualKey))) {
 				for (const auto& option : kHotkeyOptions) {
 					const bool selected = option.virtualKey ==
@@ -1516,22 +1585,21 @@ void App::RenderSettingsPage() noexcept {
 		ImGui::TextDisabled("修改快捷键后，点击下方“保存设置”使其生效。");
 	}
 	ImGui::EndChild();
-	ImGui::EndChild();
-
+	ImGui::Spacing();
 	ImGui::Separator();
 	if (AccentButton("保存设置"))
 		SaveSettingsFromFields();
 	if (!settingsStatus_.empty()) {
-		ImGui::SameLine();
 		const ImVec4 statusColor =
 			settingsStatus_.find("成功") != std::string::npos ||
 			settingsStatus_.find("已切换") != std::string::npos
 			? kSuccess
 			: kWarning;
-		ImGui::TextColored(statusColor, "%s", settingsStatus_.c_str());
+		ColoredTextWrapped(settingsStatus_, statusColor);
 	}
 	const std::string path = WideToUtf8(settingsStore_.Path().wstring());
-	RightDisabledText("配置文件：" + path);
+	DisabledTextWrapped("配置文件：" + path);
+	ImGui::EndChild();
 }
 
 std::wstring App::ResolveOverlayDllPath() const noexcept {
@@ -1638,7 +1706,8 @@ void App::RenderDwmPage() noexcept {
 	if (!dwmBusy_ && now - dwmLastRefreshTick_ >= 1000)
 		RefreshDwmStatus();
 
-	ImGui::TextDisabled(
+	ImGui::BeginChild("dwmPageScroll", ImVec2(0.0f, 0.0f), 0, 0);
+	DisabledTextWrapped(
 		"将 DwmCfgOverlayLab.dll 注入 dwm.exe，AI 回答会通过共享内存实时推送到"
 		"桌面覆盖层显示。注入与卸载都需要管理员权限；程序默认以管理员启动。");
 	ImGui::Spacing();
@@ -1646,28 +1715,38 @@ void App::RenderDwmPage() noexcept {
 	ImGui::SeparatorText("运行状态");
 	if (ImGui::BeginChild("##dwmStatus", ImVec2(0.0f, 0.0f),
 		ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY)) {
-		const auto statusRow = [](const char* label, const char* value,
-			const ImVec4& color) {
-			ImGui::TextDisabled("%s", label);
-			ImGui::SameLine(150.0f);
-			ImGui::TextColored(color, "%s", value);
-		};
-		statusRow("DWM 进程",
-			dwmProcessId_ ? std::to_string(dwmProcessId_).c_str() : "未找到",
-			dwmProcessId_ ? ImVec4(0.922f, 0.940f, 0.970f, 1.0f) : kFaint);
-		statusRow("注入状态", dwmInjected_ ? "已注入" : "未注入",
-			dwmInjected_ ? kSuccess : kFaint);
-		statusRow("IPC 状态", overlaySink_.DescribeStatus(),
-			overlaySink_.IsConnected() ? kSuccess : kWarning);
-		const int overlayVisible = overlayControl_.QueryOverlayVisible();
-		statusRow("覆盖层显示",
-			overlayVisible == 1 ? "显示中"
-			: (overlayVisible == 0 ? "已隐藏" : "未知"),
-			overlayVisible == 1 ? kSuccess
-			: (overlayVisible == 0 ? kFaint : kWarning));
-		const std::string overlayHotkeyText =
-			HotkeyText(settings_.overlayToggleHotkey);
-		statusRow("切换快捷键", overlayHotkeyText.c_str(), kFaint);
+		if (ImGui::BeginTable("##dwmStatusTable", 2,
+			ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings)) {
+			ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed,
+				ImGui::CalcTextSize("切换快捷键").x + 24.0f);
+			ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+			const auto statusRow = [](const char* label, const char* value,
+				const ImVec4& color) {
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::TextDisabled("%s", label);
+				ImGui::TableSetColumnIndex(1);
+				ColoredTextWrapped(value, color);
+			};
+			const std::string processId = dwmProcessId_
+				? std::to_string(dwmProcessId_) : "未找到";
+			statusRow("DWM 进程", processId.c_str(),
+				dwmProcessId_ ? ImVec4(0.922f, 0.940f, 0.970f, 1.0f) : kFaint);
+			statusRow("注入状态", dwmInjected_ ? "已注入" : "未注入",
+				dwmInjected_ ? kSuccess : kFaint);
+			statusRow("IPC 状态", overlaySink_.DescribeStatus(),
+				overlaySink_.IsConnected() ? kSuccess : kWarning);
+			const int overlayVisible = overlayControl_.QueryOverlayVisible();
+			statusRow("覆盖层显示",
+				overlayVisible == 1 ? "显示中"
+				: (overlayVisible == 0 ? "已隐藏" : "未知"),
+				overlayVisible == 1 ? kSuccess
+				: (overlayVisible == 0 ? kFaint : kWarning));
+			const std::string overlayHotkeyText =
+				HotkeyText(settings_.overlayToggleHotkey);
+			statusRow("切换快捷键", overlayHotkeyText.c_str(), kFaint);
+			ImGui::EndTable();
+		}
 	}
 	ImGui::EndChild();
 	ImGui::Spacing();
@@ -1683,7 +1762,7 @@ void App::RenderDwmPage() noexcept {
 			dwmBusy_ = false;
 		}
 		ImGui::EndDisabled();
-		ImGui::SameLine();
+		SameLineForButtonIfFits("卸载 DLL");
 		ImGui::BeginDisabled(dwmBusy_ || !dwmProcessId_ || !dwmInjected_);
 		if (DangerButton("卸载 DLL")) {
 			dwmBusy_ = true;
@@ -1693,23 +1772,30 @@ void App::RenderDwmPage() noexcept {
 			dwmBusy_ = false;
 		}
 		ImGui::EndDisabled();
-		ImGui::SameLine();
+		const char* visibilityLabel = overlayControl_.QueryOverlayVisible() == 0
+			? "显示覆盖层" : "隐藏覆盖层";
+		SameLineForButtonIfFits(visibilityLabel);
 		ImGui::BeginDisabled(!overlayControl_.IsDllConnected());
-		if (SecondaryButton(overlayControl_.QueryOverlayVisible() == 0
-			? "显示覆盖层" : "隐藏覆盖层"))
+		if (SecondaryButton(visibilityLabel))
 			ToggleOverlayVisible();
 		ImGui::EndDisabled();
-		ImGui::SameLine();
+		SameLineForButtonIfFits("刷新状态");
 		if (SecondaryButton("刷新状态"))
 			RefreshDwmStatus();
 	}
 	ImGui::Spacing();
 
 	ImGui::SeparatorText("DLL 路径");
-	ImGui::SetNextItemWidth(-240.0f);
+	const float pathRowWidth = ImGui::GetContentRegionAvail().x;
+	const float pathButtonsWidth = ActionButtonWidth("保存路径") +
+		ActionButtonWidth("恢复默认") + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+	const bool inlinePathActions = pathRowWidth >= pathButtonsWidth + 240.0f;
+	ImGui::SetNextItemWidth(inlinePathActions
+		? pathRowWidth - pathButtonsWidth : -FLT_MIN);
 	ImGui::InputText("##overlayDllPath",
 		overlayDllPathField_.data(), overlayDllPathField_.size());
-	ImGui::SameLine();
+	if (inlinePathActions)
+		ImGui::SameLine();
 	if (SecondaryButton("保存路径")) {
 		settings_.overlayDllPath = overlayDllPathField_.data();
 		std::string error;
@@ -1723,7 +1809,7 @@ void App::RenderDwmPage() noexcept {
 		}
 		RefreshDwmStatus();
 	}
-	ImGui::SameLine();
+	SameLineForButtonIfFits("恢复默认");
 	if (SecondaryButton("恢复默认")) {
 		settings_.overlayDllPath.clear();
 		overlayDllPathField_[0] = '\0';
@@ -1734,8 +1820,8 @@ void App::RenderDwmPage() noexcept {
 			dwmError_ = error;
 		RefreshDwmStatus();
 	}
-	ImGui::TextDisabled("当前使用：%s",
-		WideToUtf8(ResolveOverlayDllPath()).c_str());
+	DisabledTextWrapped("当前使用：" +
+		WideToUtf8(ResolveOverlayDllPath()));
 	ImGui::Spacing();
 
 	if (!dwmError_.empty())
@@ -1750,9 +1836,10 @@ void App::RenderDwmPage() noexcept {
 	}
 
 	ImGui::Spacing();
-	ImGui::TextDisabled(
+	DisabledTextWrapped(
 		"卸载时会先远程调用 DLL 的 ShutdownDwmOverlay 恢复被修改的 DWM 调用点，"
 		"确认安全后才执行 FreeLibrary；若钩子无法恢复，DLL 会保留加载以保护系统稳定。");
+	ImGui::EndChild();
 }
 
 void App::LoadSettings() noexcept {

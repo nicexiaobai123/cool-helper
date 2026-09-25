@@ -12,6 +12,20 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
+constexpr ImWchar kSymbolGlyphRanges[] = {
+	0x2000, 0x2BFF, // punctuation, arrows, math operators and common symbols
+	0
+};
+
+void MergeSymbolFont(ImFontAtlas* fonts, float size) noexcept {
+	ImFontConfig config = {};
+	config.MergeMode = true;
+	config.OversampleH = 2;
+	config.OversampleV = 2;
+	fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisym.ttf",
+		size, &config, kSymbolGlyphRanges);
+}
+
 class D3D11OutputStateGuard final {
 public:
 	explicit D3D11OutputStateGuard(ID3D11DeviceContext* context) noexcept
@@ -168,8 +182,12 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 	config.OversampleV = 2;
 	ImFont* regular = fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
 		std::round(16.0f * dpiScale), &config, cjkRanges);
+	if (regular)
+		MergeSymbolFont(fonts, std::round(16.0f * dpiScale));
 	ImFont* bold = fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyhbd.ttc",
 		std::round(16.0f * dpiScale), &config, cjkRanges);
+	if (bold)
+		MergeSymbolFont(fonts, std::round(16.0f * dpiScale));
 	ImFont* code = nullptr;
 	if (regular) {
 		ImFontConfig baseConfig = {};
@@ -185,6 +203,7 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 			mergeConfig.OversampleV = 2;
 			fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
 				std::round(15.0f * dpiScale), &mergeConfig, cjkRanges);
+			MergeSymbolFont(fonts, std::round(15.0f * dpiScale));
 		}
 	}
 	if (!regular)
@@ -200,47 +219,48 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 void OverlayRenderer::ScanMissingGlyphs(UINT64 textLength) noexcept {
 	if (!fontRegular_ || glyphScanBuffer_.empty())
 		return;
-	if (textLength < glyphScannedUpTo_)
+	if (textLength < glyphScannedUpTo_) {
 		glyphScannedUpTo_ = 0; // answer was cleared or replaced
-	if (textLength == glyphScannedUpTo_)
-		return;
-
-	const char* text = glyphScanBuffer_.data();
-	const char* end = text + textLength;
-	const char* cursor = text + glyphScannedUpTo_;
-	while (cursor < end) {
-		unsigned codepoint = static_cast<unsigned char>(*cursor);
-		int length = 1;
-		if (codepoint >= 0x80) {
-			if ((codepoint & 0xE0) == 0xC0 && cursor + 1 < end) {
-				codepoint = ((codepoint & 0x1F) << 6) | (cursor[1] & 0x3F);
-				length = 2;
-			}
-			else if ((codepoint & 0xF0) == 0xE0 && cursor + 2 < end) {
-				codepoint = ((codepoint & 0x0F) << 12) |
-					((cursor[1] & 0x3F) << 6) | (cursor[2] & 0x3F);
-				length = 3;
-			}
-			else if ((codepoint & 0xF8) == 0xF0 && cursor + 3 < end) {
-				codepoint = ((codepoint & 0x07) << 18) |
-					((cursor[1] & 0x3F) << 12) | ((cursor[2] & 0x3F) << 6) |
-					(cursor[3] & 0x3F);
-				length = 4;
-			}
-			else {
-				break; // truncated trailing sequence; rescan next round
-			}
-		}
-		// ASCII is always covered; only BMP codepoints can be backfilled into
-		// an ImWchar-based atlas.
-		if (codepoint >= 0x80 && codepoint <= 0xFFFF &&
-			fontRegular_->FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) ==
-				nullptr) {
-			pendingMissingGlyphs_.append(cursor, static_cast<size_t>(length));
-		}
-		cursor += length;
+		pendingMissingGlyphs_.clear();
 	}
-	glyphScannedUpTo_ = textLength;
+
+	if (textLength != glyphScannedUpTo_) {
+		const char* text = glyphScanBuffer_.data();
+		const char* end = text + textLength;
+		const char* cursor = text + glyphScannedUpTo_;
+		while (cursor < end) {
+			unsigned codepoint = static_cast<unsigned char>(*cursor);
+			int length = 1;
+			if (codepoint >= 0x80) {
+				if ((codepoint & 0xE0) == 0xC0 && cursor + 1 < end) {
+					codepoint = ((codepoint & 0x1F) << 6) | (cursor[1] & 0x3F);
+					length = 2;
+				}
+				else if ((codepoint & 0xF0) == 0xE0 && cursor + 2 < end) {
+					codepoint = ((codepoint & 0x0F) << 12) |
+						((cursor[1] & 0x3F) << 6) | (cursor[2] & 0x3F);
+					length = 3;
+				}
+				else if ((codepoint & 0xF8) == 0xF0 && cursor + 3 < end) {
+					codepoint = ((codepoint & 0x07) << 18) |
+						((cursor[1] & 0x3F) << 12) |
+						((cursor[2] & 0x3F) << 6) | (cursor[3] & 0x3F);
+					length = 4;
+				}
+				else {
+					break; // Keep the partial UTF-8 sequence for the next frame.
+				}
+			}
+			if (codepoint >= 0x80 && codepoint <= 0xFFFF &&
+				fontRegular_->FindGlyphNoFallback(
+					static_cast<ImWchar>(codepoint)) == nullptr) {
+				pendingMissingGlyphs_.append(
+					cursor, static_cast<size_t>(length));
+			}
+			cursor += length;
+		}
+		glyphScannedUpTo_ = static_cast<UINT64>(cursor - text);
+	}
 
 	if (pendingMissingGlyphs_.empty())
 		return;

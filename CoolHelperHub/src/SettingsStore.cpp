@@ -19,6 +19,14 @@ using nlohmann::json;
 constexpr std::string_view kLegacySystemPrompt =
 	"你是一个严谨的视觉问题分析助手。请直接给出清晰、准确的答案。";
 constexpr std::string_view kLegacyUserPrompt = "请分析截图中的内容并回答问题。";
+constexpr std::string_view kLegacyAlgorithmSystemPrompt =
+	"你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++17 并兼容 C++11。"
+	"回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，"
+	"以及可能追问和对应的简短答案提示。"
+	"除非题目明确要求，否则不要使用 C++20；信息不足时说明假设。";
+constexpr std::string_view kLegacyAlgorithmUserPrompt =
+	"请解答截图中的算法面试题：先简述思路和关键点，再给出完整的 C++ 代码，"
+	"最后说明时间复杂度、空间复杂度、边界情况，并列出面试官可能的追问及对应答案提示。";
 
 void ReplaceOnce(
 	std::string& text, std::string_view oldText, std::string_view newText) {
@@ -130,6 +138,10 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 			settings.systemPrompt = kDefaultInterviewSystemPrompt;
 		if (settings.userPrompt == kLegacyUserPrompt)
 			settings.userPrompt = kDefaultInterviewUserPrompt;
+		if (settings.systemPrompt == kLegacyAlgorithmSystemPrompt)
+			settings.systemPrompt = kAlgorithmInterviewSystemPrompt;
+		if (settings.userPrompt == kLegacyAlgorithmUserPrompt)
+			settings.userPrompt = kAlgorithmInterviewUserPrompt;
 		// Upgrade the generated v3 interview preset without touching unrelated
 		// custom text. These exact phrases only appeared in our previous preset.
 		ReplaceOnce(settings.systemPrompt,
@@ -159,6 +171,28 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 			"最后说明时间复杂度、空间复杂度、边界情况和面试官可能的追问。",
 			"最后说明时间复杂度、空间复杂度、边界情况，"
 			"并列出面试官可能的追问及对应答案提示。");
+		if (settings.systemPrompt.find("不要输出 LaTeX") == std::string::npos) {
+			ReplaceOnce(settings.systemPrompt,
+				"8. 使用中文回答，专业术语、API、代码和标识符保留英文；内容准确、紧凑，不说无关内容。",
+				"8. 使用中文回答，专业术语、API、代码和标识符保留英文；内容准确、紧凑，不说无关内容。\n"
+				"9. 复杂度和公式使用普通文本或 Unicode 符号，例如 O(K × L)，"
+				"不要输出 LaTeX 的 $...$、\\cdot 等标记。");
+			ReplaceOnce(settings.systemPrompt,
+				"4. 可能的追问和对应的简短答案提示。\n除非题目明确要求",
+				"4. 可能的追问和对应的简短答案提示；\n"
+				"5. 复杂度和公式使用普通文本或 Unicode 符号，"
+				"不要输出 LaTeX 标记。\n除非题目明确要求");
+		}
+		if (settings.userPrompt.find("不要使用 LaTeX") == std::string::npos) {
+			ReplaceOnce(settings.userPrompt,
+				"复杂度和边界情况；若题目信息不完整，请说明你的假设。不要重复题目，不要输出无关内容。",
+				"复杂度和边界情况；若题目信息不完整，请说明你的假设。"
+				"复杂度和公式不要使用 LaTeX 标记。不要重复题目，不要输出无关内容。");
+			ReplaceOnce(settings.userPrompt,
+				"4. 列出面试官可能的追问及对应答案提示。",
+				"4. 列出面试官可能的追问及对应答案提示；\n"
+				"5. 复杂度和公式不要使用 LaTeX 标记。");
+		}
 		if (const auto hotkey = document.find("captureHotkey");
 			hotkey != document.end() && hotkey->is_object()) {
 			settings.captureHotkey.control = hotkey->value(

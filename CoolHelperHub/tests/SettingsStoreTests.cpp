@@ -87,6 +87,25 @@ int main() {
 		migrated.overlayScrollUpHotkey.alt &&
 		migrated.overlayScrollUpHotkey.virtualKey == VK_OEM_MINUS;
 
+	// The previous algorithm preset used very long single lines. Migrate only
+	// that exact preset to the paragraph-formatted version used by the UI.
+	{
+		std::ofstream legacyAlgorithm(path, std::ios::binary | std::ios::trunc);
+		legacyAlgorithm << R"({
+  "version": 7,
+  "systemPrompt": "你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++17 并兼容 C++11。回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，以及可能追问和对应的简短答案提示。除非题目明确要求，否则不要使用 C++20；信息不足时说明假设。",
+  "userPrompt": "请解答截图中的算法面试题：先简述思路和关键点，再给出完整的 C++ 代码，最后说明时间复杂度、空间复杂度、边界情况，并列出面试官可能的追问及对应答案提示。"
+})";
+	}
+	coolhelper::AppSettings migratedAlgorithm;
+	passed = passed && store.Load(migratedAlgorithm, error) &&
+		migratedAlgorithm.systemPrompt ==
+			coolhelper::kAlgorithmInterviewSystemPrompt &&
+		migratedAlgorithm.userPrompt ==
+			coolhelper::kAlgorithmInterviewUserPrompt &&
+		migratedAlgorithm.systemPrompt.find('\n') != std::string::npos &&
+		migratedAlgorithm.userPrompt.find('\n') != std::string::npos;
+
 	DeleteFileW(path.c_str());
 	if (!passed)
 		std::cerr << "DPAPI settings round-trip failed: " << error << '\n';

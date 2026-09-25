@@ -2,6 +2,7 @@
 
 #include "coolhelper/Logger.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <string_view>
@@ -16,6 +17,19 @@ constexpr UINT32 kIpcMessageMaxPayload = overlayipc::kIpcMaxPayload;
 constexpr UINT64 kIpcSectionSize = sizeof(IpcSharedHeader) +
 	overlayipc::kIpcSlotCount * overlayipc::kIpcSlotSize;
 constexpr UINT64 kAnswerEventQueueLimit = 4096;
+
+UINT32 Utf8SafeChunkSize(std::string_view payload) noexcept {
+	std::size_t chunk = std::min<std::size_t>(
+		payload.size(), kIpcMessageMaxPayload);
+	if (chunk == payload.size())
+		return static_cast<UINT32>(chunk);
+	// Do not leave half of a multi-byte character in either IPC message. This
+	// also keeps the visible prefix valid if a later continuation is dropped.
+	while (chunk > 0 &&
+		(static_cast<unsigned char>(payload[chunk]) & 0xC0u) == 0x80u)
+		--chunk;
+	return static_cast<UINT32>(chunk != 0 ? chunk : kIpcMessageMaxPayload);
+}
 
 // dwm.exe runs under the per-session DWM-x virtual account, so every named
 // object must be creatable/openable by it: a NULL DACL grants everyone access.
@@ -316,9 +330,7 @@ bool OverlayIpcSink::WriteMessage(
 		}
 	}
 
-	const UINT32 chunk = static_cast<UINT32>(payload.size() < kIpcMessageMaxPayload
-		? payload.size()
-		: kIpcMessageMaxPayload);
+	const UINT32 chunk = Utf8SafeChunkSize(payload);
 	UINT8* slot = reinterpret_cast<UINT8*>(header) + sizeof(IpcSharedHeader) +
 		(write & (overlayipc::kIpcSlotCount - 1)) * overlayipc::kIpcSlotSize;
 	auto* messageHeader = reinterpret_cast<IpcMessageHeader*>(slot);
