@@ -4,6 +4,7 @@
 #include "coolhelper/Logger.h"
 #include "coolhelper/Screenshot.h"
 #include "resource.h"
+#include "../../Shared/MarkdownText.h"
 
 #include <dwmapi.h>
 #include <shellapi.h>
@@ -39,6 +40,10 @@ constexpr char kStaticUiGlyphSeed[] =
 	"答案向上下滚动";
 
 constexpr ImWchar kSymbolGlyphRanges[] = {
+	0x00B1, 0x00B1, // plus-minus
+	0x00D7, 0x00D7, // multiplication sign
+	0x00F7, 0x00F7, // division sign
+	0x0391, 0x03C9, // Greek letters used by common complexity notation
 	0x2000, 0x2BFF, // punctuation, arrows, math operators and common symbols
 	0
 };
@@ -712,6 +717,7 @@ void MdRenderInlineRuns(
 struct HubMarkdownRenderer {
 	ImFont* bold = nullptr;
 	ImFont* code = nullptr;
+	std::string normalizedText_;
 	std::string codeBuffer_;
 	std::vector<std::vector<std::string>> tableRows;
 	std::vector<float> tableWidths_;
@@ -724,7 +730,9 @@ struct HubMarkdownRenderer {
 	void Render(const char* text) noexcept {
 		codeBlockIndex_ = 0;
 		try {
-			RenderBlockLines(text, text + strlen(text));
+			coolhelper_shared::NormalizeMarkdownMath(text, normalizedText_);
+			RenderBlockLines(normalizedText_.data(),
+				normalizedText_.data() + normalizedText_.size());
 		}
 		catch (...) {
 			ImGui::TextUnformatted(text);

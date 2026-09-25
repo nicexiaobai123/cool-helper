@@ -122,6 +122,10 @@ if(BUILD_TESTING)
     coolhelper_core winhttp windowscodecs crypt32 shell32 ole32 uuid ws2_32
   )
   add_test(NAME CoolHelperOpenAITests COMMAND CoolHelperOpenAITests)
+
+  add_executable(CoolHelperMarkdownTextTests tests/MarkdownTextTests.cpp)
+  target_compile_options(CoolHelperMarkdownTextTests PRIVATE /W4 /permissive- /utf-8)
+  add_test(NAME CoolHelperMarkdownTextTests COMMAND CoolHelperMarkdownTextTests)
 endif()
 
 install(TARGETS CoolHelperHub RUNTIME DESTINATION .)

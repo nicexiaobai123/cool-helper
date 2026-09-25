@@ -17,6 +17,10 @@ constexpr float kCodeFontSize = 17.0f;
 constexpr float kFontRasterizerMultiply = 1.10f;
 
 constexpr ImWchar kSymbolGlyphRanges[] = {
+	0x00B1, 0x00B1, // plus-minus
+	0x00D7, 0x00D7, // multiplication sign
+	0x00F7, 0x00F7, // division sign
+	0x0391, 0x03C9, // Greek letters used by common complexity notation
 	0x2000, 0x2BFF, // punctuation, arrows, math operators and common symbols
 	0
 };

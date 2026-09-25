@@ -1,4 +1,5 @@
 #include "OverlayUi.h"
+#include "../../../Shared/MarkdownText.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -482,7 +483,9 @@ void OverlayUi::BuildAnswerSection(
 void OverlayUi::RenderMarkdown(const char* text) noexcept {
 	codeBlockIndex_ = 0;
 	try {
-		RenderBlockLines(text, text + strlen(text));
+		coolhelper_shared::NormalizeMarkdownMath(text, normalizedText_);
+		RenderBlockLines(normalizedText_.data(),
+			normalizedText_.data() + normalizedText_.size());
 	}
 	catch (...) {
 		ImGui::TextUnformatted(text);

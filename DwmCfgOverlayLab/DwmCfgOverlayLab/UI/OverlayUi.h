@@ -35,6 +35,7 @@ private:
 	ImFont* fontCode_ = nullptr;
 	int codeBlockIndex_ = 0;
 	// Reused scratch buffers so a busy frame never reallocates needlessly.
+	std::string normalizedText_;
 	std::string codeBuffer_;
 	std::vector<char> answerBuffer_;
 	std::vector<std::vector<std::string>> tableRows_;
