@@ -16,7 +16,7 @@ constexpr float kRegularFontSize = 18.0f;
 constexpr float kCodeFontSize = 17.0f;
 constexpr float kFontRasterizerMultiply = 1.10f;
 constexpr ULONGLONG kGlyphRebuildIntervalMs = 750;
-constexpr char kTechnicalGlyphSeed[] = "溢";
+constexpr char kTechnicalGlyphSeed[] = "溢函";
 
 constexpr ImWchar kSymbolGlyphRanges[] = {
 	0x00B1, 0x00B1, // plus-minus
@@ -195,11 +195,13 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 		ImFontGlyphRangesBuilder builder;
 		builder.AddRanges(fonts->GetGlyphRangesChineseSimplifiedCommon());
 		builder.AddText(kTechnicalGlyphSeed);
-		builder.BuildRanges(&extraGlyphRanges_);
+		ImVector<ImWchar> ranges;
+		builder.BuildRanges(&ranges);
+		extraGlyphRanges_.assign(ranges.Data, ranges.Data + ranges.Size);
 	}
 	const UINT dpi = GetDpiForWindow(GetDesktopWindow());
 	const float dpiScale = dpi > 0 ? static_cast<float>(dpi) / 96.0f : 1.0f;
-	const ImWchar* cjkRanges = extraGlyphRanges_.Data;
+	const ImWchar* cjkRanges = extraGlyphRanges_.data();
 	const float regularSize = std::round(kRegularFontSize * dpiScale);
 	const float codeSize = std::round(kCodeFontSize * dpiScale);
 	ImFontConfig config = {};
@@ -235,6 +237,25 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 		code = regular;
 	fontRegular_ = regular;
 	ui_.SetFonts(regular, bold, code);
+}
+
+bool OverlayRenderer::RebuildUiFonts() noexcept {
+	ImGuiIO& io = ImGui::GetIO();
+	ImGui_ImplDX11_InvalidateDeviceObjects();
+	io.Fonts->Clear();
+	LoadUiFonts();
+	if (!io.Fonts->Build()) {
+		DWM_LOG("Extended font atlas build failed");
+		return false;
+	}
+	if (!ImGui_ImplDX11_CreateDeviceObjects()) {
+		DWM_LOG("Extended font atlas upload failed");
+		return false;
+	}
+	// Cached draw data contains UVs from the previous atlas. Force a fresh UI
+	// frame before it can be rendered with the replacement texture.
+	nextFrameQpc_ = 0;
+	return true;
 }
 
 void OverlayRenderer::ScanMissingGlyphs(
@@ -301,14 +322,26 @@ void OverlayRenderer::ScanMissingGlyphs(
 	ImFontGlyphRangesBuilder builder;
 	builder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
 	if (!extraGlyphRanges_.empty())
-		builder.AddRanges(extraGlyphRanges_.Data);
+		builder.AddRanges(extraGlyphRanges_.data());
 	builder.AddText(pendingMissingGlyphs_.c_str());
-	pendingMissingGlyphs_.clear();
-	builder.BuildRanges(&extraGlyphRanges_);
-	io.Fonts->Clear();
-	LoadUiFonts();
-	ImGui_ImplDX11_InvalidateDeviceObjects();
-	DWM_LOG("Font atlas rebuilt with extended glyph ranges");
+	ImVector<ImWchar> builtRanges;
+	builder.BuildRanges(&builtRanges);
+	const std::vector<ImWchar> previousRanges = extraGlyphRanges_;
+	extraGlyphRanges_.assign(
+		builtRanges.Data, builtRanges.Data + builtRanges.Size);
+	if (RebuildUiFonts()) {
+		pendingMissingGlyphs_.clear();
+		DWM_LOG("Font atlas rebuilt with extended glyph ranges");
+		return;
+	}
+
+	// Keep the overlay usable if an unexpectedly large range exceeds the
+	// device's atlas limits. The missing text remains queued for a later retry.
+	extraGlyphRanges_ = previousRanges;
+	if (RebuildUiFonts())
+		DWM_LOG("Extended font atlas rejected; previous atlas restored");
+	else
+		DWM_LOG("Font atlas fallback failed");
 }
 
 bool OverlayRenderer::GetOverlayBounds(

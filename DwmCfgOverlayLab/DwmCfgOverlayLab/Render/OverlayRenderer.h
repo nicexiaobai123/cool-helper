@@ -49,6 +49,7 @@ private:
 		D3D11_TEXTURE2D_DESC& description) noexcept;
 	bool EnsureDevice(ID3D11Device* frameDevice) noexcept;
 	void LoadUiFonts() noexcept;
+	bool RebuildUiFonts() noexcept;
 	bool ShouldBuildFrame(UINT width, UINT height) noexcept;
 	static bool GetOverlayBounds(
 		const ImVec2& position,
@@ -78,7 +79,7 @@ private:
 	UiStateStore uiState_;
 	IAnswerProvider* answerProvider_ = nullptr;
 	ImFont* fontRegular_ = nullptr;
-	ImVector<ImWchar> extraGlyphRanges_;
+	std::vector<ImWchar> extraGlyphRanges_;
 	std::string pendingMissingGlyphs_;
 	std::vector<char> glyphScanBuffer_;
 	UINT64 glyphScanEpoch_ = 0;
