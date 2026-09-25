@@ -39,7 +39,8 @@ public:
 private:
 	// Scans newly appended answer text for characters missing from the font
 	// and rebuilds the atlas with extended ranges (throttled).
-	void ScanMissingGlyphs(UINT64 textLength) noexcept;
+	void ScanMissingGlyphs(
+		UINT64 answerEpoch, UINT64 textLength, bool forceRebuild) noexcept;
 	static constexpr UINT kTargetFps = 60;
 
 	bool AcquireCurrentBackBuffer(
@@ -80,6 +81,7 @@ private:
 	ImVector<ImWchar> extraGlyphRanges_;
 	std::string pendingMissingGlyphs_;
 	std::vector<char> glyphScanBuffer_;
+	UINT64 glyphScanEpoch_ = 0;
 	UINT64 glyphScannedUpTo_ = 0;
 	ULONGLONG lastGlyphRebuildTick_ = 0;
 	DesktopPollingInputSource inputSource_;

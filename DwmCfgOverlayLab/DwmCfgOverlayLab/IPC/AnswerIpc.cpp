@@ -321,6 +321,13 @@ AnswerState AnswerIpcService::GetAnswerState() const noexcept {
 	return state;
 }
 
+UINT64 AnswerIpcService::GetAnswerEpoch() const noexcept {
+	AcquireSRWLockShared(&modelLock_);
+	const UINT64 epoch = epoch_;
+	ReleaseSRWLockShared(&modelLock_);
+	return epoch;
+}
+
 UINT64 AnswerIpcService::CopyAnswerText(
 	char* buffer, UINT64 capacity) const noexcept {
 	AcquireSRWLockShared(&modelLock_);

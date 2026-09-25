@@ -28,6 +28,7 @@ public:
 	virtual ~IAnswerProvider() = default;
 	virtual bool IsHubConnected() const noexcept = 0;
 	virtual AnswerState GetAnswerState() const noexcept = 0;
+	virtual UINT64 GetAnswerEpoch() const noexcept = 0;
 	virtual UINT64 CopyAnswerText(char* buffer, UINT64 capacity) const noexcept = 0;
 	virtual UINT64 CopyErrorText(char* buffer, UINT64 capacity) const noexcept = 0;
 	virtual UINT64 CopyProgressText(char* buffer, UINT64 capacity) const noexcept = 0;

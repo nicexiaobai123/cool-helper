@@ -15,6 +15,8 @@ namespace {
 constexpr float kRegularFontSize = 18.0f;
 constexpr float kCodeFontSize = 17.0f;
 constexpr float kFontRasterizerMultiply = 1.10f;
+constexpr ULONGLONG kGlyphRebuildIntervalMs = 750;
+constexpr char kTechnicalGlyphSeed[] = "溢";
 
 constexpr ImWchar kSymbolGlyphRanges[] = {
 	0x00B1, 0x00B1, // plus-minus
@@ -189,11 +191,15 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 	// Rasterize at the desktop's native DPI with vertical oversampling so the
 	// composited glyphs stay crisp. extraGlyphRanges_ accumulates characters
 	// discovered missing at runtime (dynamic glyph backfill).
+	if (extraGlyphRanges_.empty()) {
+		ImFontGlyphRangesBuilder builder;
+		builder.AddRanges(fonts->GetGlyphRangesChineseSimplifiedCommon());
+		builder.AddText(kTechnicalGlyphSeed);
+		builder.BuildRanges(&extraGlyphRanges_);
+	}
 	const UINT dpi = GetDpiForWindow(GetDesktopWindow());
 	const float dpiScale = dpi > 0 ? static_cast<float>(dpi) / 96.0f : 1.0f;
-	const ImWchar* cjkRanges = extraGlyphRanges_.empty()
-		? fonts->GetGlyphRangesChineseSimplifiedCommon()
-		: extraGlyphRanges_.Data;
+	const ImWchar* cjkRanges = extraGlyphRanges_.Data;
 	const float regularSize = std::round(kRegularFontSize * dpiScale);
 	const float codeSize = std::round(kCodeFontSize * dpiScale);
 	ImFontConfig config = {};
@@ -231,10 +237,16 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 	ui_.SetFonts(regular, bold, code);
 }
 
-void OverlayRenderer::ScanMissingGlyphs(UINT64 textLength) noexcept {
+void OverlayRenderer::ScanMissingGlyphs(
+	UINT64 answerEpoch, UINT64 textLength, bool forceRebuild) noexcept {
 	if (!fontRegular_ || glyphScanBuffer_.empty())
 		return;
-	if (textLength < glyphScannedUpTo_) {
+	if (answerEpoch != glyphScanEpoch_) {
+		glyphScanEpoch_ = answerEpoch;
+		glyphScannedUpTo_ = 0;
+		pendingMissingGlyphs_.clear();
+	}
+	else if (textLength < glyphScannedUpTo_) {
 		glyphScannedUpTo_ = 0; // answer was cleared or replaced
 		pendingMissingGlyphs_.clear();
 	}
@@ -280,8 +292,9 @@ void OverlayRenderer::ScanMissingGlyphs(UINT64 textLength) noexcept {
 	if (pendingMissingGlyphs_.empty())
 		return;
 	const ULONGLONG now = GetTickCount64();
-	if (lastGlyphRebuildTick_ != 0 && now - lastGlyphRebuildTick_ < 3000)
-		return; // batch newly found characters; rebuild at most every 3s
+	if (!forceRebuild && lastGlyphRebuildTick_ != 0 &&
+		now - lastGlyphRebuildTick_ < kGlyphRebuildIntervalMs)
+		return; // Batch streamed glyphs without leaving fallback boxes visible.
 	lastGlyphRebuildTick_ = now;
 
 	ImGuiIO& io = ImGui::GetIO();
@@ -409,7 +422,9 @@ void OverlayRenderer::RenderFrame(
 			glyphScanBuffer_.resize(static_cast<size_t>(kScanCapacity));
 		const UINT64 length = answerProvider_->CopyAnswerText(
 			glyphScanBuffer_.data(), glyphScanBuffer_.size());
-		ScanMissingGlyphs(length);
+		const AnswerState answerState = answerProvider_->GetAnswerState();
+		ScanMissingGlyphs(answerProvider_->GetAnswerEpoch(), length,
+			answerState == AnswerState::Completed);
 	}
 
 	if (ShouldBuildFrame(backBufferDescription.Width,

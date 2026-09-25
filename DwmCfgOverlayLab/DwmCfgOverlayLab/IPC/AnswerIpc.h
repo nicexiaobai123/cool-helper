@@ -77,6 +77,7 @@ public:
 	// IAnswerProvider (called on the Present thread).
 	bool IsHubConnected() const noexcept override;
 	AnswerState GetAnswerState() const noexcept override;
+	UINT64 GetAnswerEpoch() const noexcept override;
 	UINT64 CopyAnswerText(char* buffer, UINT64 capacity) const noexcept override;
 	UINT64 CopyErrorText(char* buffer, UINT64 capacity) const noexcept override;
 	UINT64 CopyProgressText(char* buffer, UINT64 capacity) const noexcept override;
