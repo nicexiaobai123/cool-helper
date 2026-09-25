@@ -222,7 +222,7 @@ bool TestReasoningProgress() {
 		if (event.type == coolhelper::AnswerEventType::Progress) {
 			if (event.payload.empty())
 				sawWaiting = true;
-			else if (event.payload.size() <= 75 &&
+			else if (event.payload.size() <= 111 &&
 				event.payload.find("正在分析 复杂度") != std::string::npos)
 				sawReasoning = true;
 		}

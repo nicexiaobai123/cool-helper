@@ -130,9 +130,9 @@ void AppendReasoningPreview(std::string& preview, std::string_view delta) {
 	}
 
 	// This is only an activity hint. Keep a short tail so it remains on one
-	// overlay line: at most 72 UTF-8 bytes and 48 code points.
-	constexpr std::size_t kPreviewByteLimit = 72;
-	constexpr std::size_t kPreviewCodepointLimit = 48;
+	// overlay line: at most 108 UTF-8 bytes and 36 visible code points.
+	constexpr std::size_t kPreviewByteLimit = 108;
+	constexpr std::size_t kPreviewCodepointLimit = 36;
 	std::size_t byteStart = preview.size() > kPreviewByteLimit
 		? preview.size() - kPreviewByteLimit : 0;
 	while (byteStart < preview.size() &&
