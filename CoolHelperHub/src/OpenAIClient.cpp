@@ -129,15 +129,30 @@ void AppendReasoningPreview(std::string& preview, std::string_view delta) {
 		preview.push_back(static_cast<char>(value));
 	}
 
-	// This is a transient one-line tail, not stored chain-of-thought. Keep it
-	// compact and trim only at a UTF-8 code-point boundary.
-	constexpr std::size_t kPreviewByteLimit = 360;
-	if (preview.size() <= kPreviewByteLimit)
+	// This is only an activity hint. Keep a short tail so it remains on one
+	// overlay line: at most 72 UTF-8 bytes and 48 code points.
+	constexpr std::size_t kPreviewByteLimit = 72;
+	constexpr std::size_t kPreviewCodepointLimit = 48;
+	std::size_t byteStart = preview.size() > kPreviewByteLimit
+		? preview.size() - kPreviewByteLimit : 0;
+	while (byteStart < preview.size() &&
+		(static_cast<unsigned char>(preview[byteStart]) & 0xC0u) == 0x80u)
+		++byteStart;
+
+	std::size_t codepointStart = preview.size();
+	std::size_t codepointCount = 0;
+	while (codepointStart > 0 && codepointCount < kPreviewCodepointLimit) {
+		--codepointStart;
+		while (codepointStart > 0 &&
+			(static_cast<unsigned char>(preview[codepointStart]) & 0xC0u) == 0x80u)
+			--codepointStart;
+		++codepointCount;
+	}
+
+	const std::size_t start = byteStart > codepointStart
+		? byteStart : codepointStart;
+	if (start == 0)
 		return;
-	std::size_t start = preview.size() - kPreviewByteLimit;
-	while (start < preview.size() &&
-		(static_cast<unsigned char>(preview[start]) & 0xC0u) == 0x80u)
-		++start;
 	preview.erase(0, start);
 	preview.insert(0, "…");
 }

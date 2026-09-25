@@ -203,7 +203,7 @@ bool TestStreaming() {
 
 bool TestReasoningProgress() {
 	MockServer server(200, {
-		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"正在分析\\n复杂度\"}}]}\n\n",
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789正在分析\\n复杂度\"}}]}\n\n",
 		"data: {\"choices\":[{\"delta\":{\"content\":\"最终答案\"}}]}\n\n",
 		"data: [DONE]\n\n"
 	});
@@ -222,7 +222,8 @@ bool TestReasoningProgress() {
 		if (event.type == coolhelper::AnswerEventType::Progress) {
 			if (event.payload.empty())
 				sawWaiting = true;
-			else if (event.payload.find("正在分析 复杂度") != std::string::npos)
+			else if (event.payload.size() <= 75 &&
+				event.payload.find("正在分析 复杂度") != std::string::npos)
 				sawReasoning = true;
 		}
 		else if (event.type == coolhelper::AnswerEventType::Delta) {
