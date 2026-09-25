@@ -12,16 +12,29 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
+constexpr float kRegularFontSize = 18.0f;
+constexpr float kCodeFontSize = 17.0f;
+constexpr float kFontRasterizerMultiply = 1.10f;
+
 constexpr ImWchar kSymbolGlyphRanges[] = {
 	0x2000, 0x2BFF, // punctuation, arrows, math operators and common symbols
 	0
 };
 
-void MergeSymbolFont(ImFontAtlas* fonts, float size) noexcept {
-	ImFontConfig config = {};
-	config.MergeMode = true;
+void ConfigureCrispFont(ImFontConfig& config, bool merge = false) noexcept {
+	config.MergeMode = merge;
 	config.OversampleH = 2;
 	config.OversampleV = 2;
+	// Integer horizontal advances avoid sampling glyphs between back-buffer
+	// pixels, while a small alpha boost keeps strokes readable after DWM blends
+	// the translucent overlay with the desktop.
+	config.PixelSnapH = true;
+	config.RasterizerMultiply = kFontRasterizerMultiply;
+}
+
+void MergeSymbolFont(ImFontAtlas* fonts, float size) noexcept {
+	ImFontConfig config = {};
+	ConfigureCrispFont(config, true);
 	fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisym.ttf",
 		size, &config, kSymbolGlyphRanges);
 }
@@ -177,33 +190,31 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 	const ImWchar* cjkRanges = extraGlyphRanges_.empty()
 		? fonts->GetGlyphRangesChineseSimplifiedCommon()
 		: extraGlyphRanges_.Data;
+	const float regularSize = std::round(kRegularFontSize * dpiScale);
+	const float codeSize = std::round(kCodeFontSize * dpiScale);
 	ImFontConfig config = {};
-	config.OversampleH = 2;
-	config.OversampleV = 2;
+	ConfigureCrispFont(config);
 	ImFont* regular = fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
-		std::round(16.0f * dpiScale), &config, cjkRanges);
+		regularSize, &config, cjkRanges);
 	if (regular)
-		MergeSymbolFont(fonts, std::round(16.0f * dpiScale));
+		MergeSymbolFont(fonts, regularSize);
 	ImFont* bold = fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyhbd.ttc",
-		std::round(16.0f * dpiScale), &config, cjkRanges);
+		regularSize, &config, cjkRanges);
 	if (bold)
-		MergeSymbolFont(fonts, std::round(16.0f * dpiScale));
+		MergeSymbolFont(fonts, regularSize);
 	ImFont* code = nullptr;
 	if (regular) {
 		ImFontConfig baseConfig = {};
-		baseConfig.OversampleH = 2;
-		baseConfig.OversampleV = 2;
+		ConfigureCrispFont(baseConfig);
 		code = fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf",
-			std::round(15.0f * dpiScale), &baseConfig,
+			codeSize, &baseConfig,
 			fonts->GetGlyphRangesDefault());
 		if (code) {
 			ImFontConfig mergeConfig = {};
-			mergeConfig.MergeMode = true;
-			mergeConfig.OversampleH = 2;
-			mergeConfig.OversampleV = 2;
+			ConfigureCrispFont(mergeConfig, true);
 			fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc",
-				std::round(15.0f * dpiScale), &mergeConfig, cjkRanges);
-			MergeSymbolFont(fonts, std::round(15.0f * dpiScale));
+				codeSize, &mergeConfig, cjkRanges);
+			MergeSymbolFont(fonts, codeSize);
 		}
 	}
 	if (!regular)

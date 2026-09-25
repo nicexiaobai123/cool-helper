@@ -20,6 +20,9 @@ constexpr ImU32 kCodeBackground = IM_COL32(14, 18, 25, 235);
 constexpr ImU32 kTableLine = IM_COL32(255, 255, 255, 34);
 constexpr ImU32 kTableHeaderLine = IM_COL32(96, 165, 250, 170);
 constexpr UINT64 kAnswerCopyCapacity = 512 * 1024 + 2;
+constexpr float kOverlayMargin = 32.0f;
+constexpr float kDefaultOverlayWidth = 840.0f;
+constexpr float kDefaultOverlayHeight = 820.0f;
 
 ImFont* FontOrDefault(ImFont* font) noexcept {
 	return font && font->IsLoaded() ? font : ImGui::GetFont();
@@ -359,10 +362,17 @@ UiFrameResult OverlayUi::Build(
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	const ImVec2 work = viewport->WorkSize;
 
-	ImGui::SetNextWindowPos(ImVec2(32.0f, 32.0f), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(
-		work.x - 64.0f < 720.0f ? work.x - 64.0f : 720.0f,
-		work.y - 64.0f < 750.0f ? work.y - 64.0f : 750.0f),
+	const float remainingWidth = work.x - kOverlayMargin * 2.0f;
+	const float remainingHeight = work.y - kOverlayMargin * 2.0f;
+	const float availableWidth = remainingWidth > 1.0f ? remainingWidth : 1.0f;
+	const float availableHeight = remainingHeight > 1.0f ? remainingHeight : 1.0f;
+	const float windowWidth = availableWidth < kDefaultOverlayWidth
+		? availableWidth : kDefaultOverlayWidth;
+	const float windowHeight = availableHeight < kDefaultOverlayHeight
+		? availableHeight : kDefaultOverlayHeight;
+	ImGui::SetNextWindowPos(ImVec2(kOverlayMargin, kOverlayMargin),
+		ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(windowWidth, windowHeight),
 		ImGuiCond_FirstUseEver);
 	ImGui::Begin("DwmCfgOverlayLab", nullptr, ImGuiWindowFlags_NoCollapse);
 
