@@ -677,39 +677,74 @@ void MdRenderInlineRuns(
 	const float startX = cursor.x;
 	const float right = startX + ImGui::GetContentRegionAvail().x;
 	float maxY = cursor.y + lineHeight;
+	auto wrapUnitEnd = [](const char* unitBegin, const char* runEnd) noexcept {
+		int charLen = 0;
+		const unsigned c = MdDecodeUtf8(unitBegin, runEnd, &charLen);
+		const char* unitEnd = unitBegin + charLen;
+		if (c != ' ' && !MdIsWideCodepoint(c)) {
+			while (unitEnd < runEnd) {
+				int nextLen = 0;
+				const unsigned next =
+					MdDecodeUtf8(unitEnd, runEnd, &nextLen);
+				if (next == ' ' || MdIsWideCodepoint(next))
+					break;
+				unitEnd += nextLen;
+			}
+		}
+		return unitEnd;
+	};
 
 	for (const MdRun& run : runs) {
 		ImFont* font = fonts[run.style];
 		const bool codeBg = run.style == 2;
 		const char* w = run.begin;
-		while (w < run.end) {
-			int charLen = 0;
-			const unsigned c = MdDecodeUtf8(w, run.end, &charLen);
-			// One wrap unit: a wide character alone, or an ASCII run up to
-			// the next space or wide character.
-			const char* unitEnd = w + charLen;
-			if (c != ' ' && !MdIsWideCodepoint(c)) {
-				while (unitEnd < run.end) {
-					int nextLen = 0;
-					const unsigned next =
-						MdDecodeUtf8(unitEnd, run.end, &nextLen);
-					if (next == ' ' || MdIsWideCodepoint(next))
+		if (codeBg) {
+			while (w < run.end) {
+				const char* firstEnd = wrapUnitEnd(w, run.end);
+				const float firstWidth = font->CalcTextSizeA(
+					font->FontSize, FLT_MAX, 0.0f, w, firstEnd).x;
+				if (cursor.x + firstWidth > right && cursor.x > startX) {
+					cursor.x = startX;
+					cursor.y += lineHeight;
+				}
+
+				const char* segmentBegin = w;
+				float segmentWidth = 0.0f;
+				while (w < run.end) {
+					const char* unitEnd = wrapUnitEnd(w, run.end);
+					const float unitWidth = font->CalcTextSizeA(
+						font->FontSize, FLT_MAX, 0.0f, w, unitEnd).x;
+					if (cursor.x + segmentWidth + unitWidth > right &&
+						segmentWidth > 0.0f)
 						break;
-					unitEnd += nextLen;
+					segmentWidth += unitWidth;
+					w = unitEnd;
+				}
+
+				drawList->AddRectFilled(
+					ImVec2(cursor.x - 2.0f, cursor.y),
+					ImVec2(cursor.x + segmentWidth + 2.0f,
+						cursor.y + lineHeight),
+					kMdInlineCodeBackground, 2.0f);
+				drawList->AddText(font, font->FontSize, cursor,
+					colors[run.style], segmentBegin, w);
+				cursor.x += segmentWidth;
+				if (cursor.y + lineHeight > maxY)
+					maxY = cursor.y + lineHeight;
+				if (w < run.end) {
+					cursor.x = startX;
+					cursor.y += lineHeight;
 				}
 			}
+			continue;
+		}
+		while (w < run.end) {
+			const char* unitEnd = wrapUnitEnd(w, run.end);
 			const float unitWidth = font->CalcTextSizeA(
 				font->FontSize, FLT_MAX, 0.0f, w, unitEnd).x;
 			if (cursor.x + unitWidth > right && cursor.x > startX) {
 				cursor.x = startX;
 				cursor.y += lineHeight;
-			}
-			if (codeBg) {
-				drawList->AddRectFilled(
-					ImVec2(cursor.x - 2.0f, cursor.y),
-					ImVec2(cursor.x + unitWidth + 2.0f,
-						cursor.y + lineHeight),
-					kMdInlineCodeBackground, 2.0f);
 			}
 			drawList->AddText(font, font->FontSize, cursor,
 				colors[run.style], w, unitEnd);
