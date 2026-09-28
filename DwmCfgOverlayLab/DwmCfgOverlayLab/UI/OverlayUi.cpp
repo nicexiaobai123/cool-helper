@@ -29,210 +29,15 @@ ImFont* FontOrDefault(ImFont* font) noexcept {
 	return font && font->IsLoaded() ? font : ImGui::GetFont();
 }
 
-const char* FindChar(const char* begin, const char* end, char value) noexcept {
-	const void* found = memchr(begin, value, static_cast<size_t>(end - begin));
-	return static_cast<const char*>(found);
-}
-
-const char* FindDoubleChar(const char* begin, const char* end, char value) noexcept {
-	for (const char* scan = begin; scan + 1 < end; ++scan) {
-		if (scan[0] == value && scan[1] == value)
-			return scan;
-	}
-	return nullptr;
-}
-
-const char* SkipSpaces(const char* p, const char* end) noexcept {
-	while (p < end && (*p == ' ' || *p == '\t'))
-		++p;
-	return p;
-}
-
-bool IsBlankLine(const char* begin, const char* end) noexcept {
-	for (const char* p = begin; p < end; ++p) {
-		if (*p != ' ' && *p != '\t')
-			return false;
-	}
-	return true;
-}
-
-bool IsHorizontalRule(const char* begin, const char* end) noexcept {
-	for (const char* p = begin; p < end; ++p) {
-		if (*p != begin[0] && *p != ' ')
-			return false;
-	}
-	return true;
-}
-
-// "1. " / "1) " ordered-list marker.
-bool ParseOrderedListMarker(
-	const char* p, const char* end, const char** contentBegin) noexcept {
-	if (p >= end || *p < '0' || *p > '9')
-		return false;
-	const char* q = p;
-	int digits = 0;
-	while (q < end && *q >= '0' && *q <= '9' && digits < 4) {
-		++q;
-		++digits;
-	}
-	if (q + 1 < end && (*q == '.' || *q == ')') && q[1] == ' ') {
-		*contentBegin = q + 2;
-		return true;
-	}
-	return false;
-}
-
-bool IsTableSeparatorCell(const std::string& cell) noexcept {
-	size_t index = 0;
-	const size_t size = cell.size();
-	while (index < size && (cell[index] == ' ' || cell[index] == '\t'))
-		++index;
-	if (index < size && cell[index] == ':')
-		++index;
-	size_t dashes = 0;
-	while (index < size && cell[index] == '-') {
-		++index;
-		++dashes;
-	}
-	if (index < size && cell[index] == ':')
-		++index;
-	while (index < size && (cell[index] == ' ' || cell[index] == '\t'))
-		++index;
-	return dashes >= 2 && index == size;
-}
-
-bool ParseTableRow(
-	const char* begin, const char* end, std::vector<std::string>* cells) noexcept {
-	cells->clear();
-	const char* p = begin + 1; // caller guarantees begin[0] == '|'
-	std::string cell;
-	while (p <= end) {
-		if (p == end || *p == '|') {
-			size_t lead = 0;
-			size_t trail = cell.size();
-			while (lead < trail && (cell[lead] == ' ' || cell[lead] == '\t'))
-				++lead;
-			while (trail > lead && (cell[trail - 1] == ' ' || cell[trail - 1] == '\t'))
-				--trail;
-			cells->emplace_back(cell, lead, trail - lead);
-			cell.clear();
-			if (p == end)
-				break;
-			++p;
-			continue;
-		}
-		cell.push_back(*p++);
-	}
-	// A trailing pipe yields an empty final cell; a row ending without a pipe
-	// keeps its last cell.
-	if (!cells->empty() && cells->back().empty())
-		cells->pop_back();
-	return !cells->empty();
-}
-
-// Splits a logical line into styled runs without touching ImGui state.
-struct MdRun {
-	const char* begin;
-	const char* end;
-	int style; // 0 plain, 1 bold, 2 code, 3 link text, 4 link url
-};
-
-void CollectRuns(const char* begin, const char* end, std::vector<MdRun>& runs) noexcept {
-	const char* p = begin;
-	while (p < end) {
-		const char* doubleStar = FindDoubleChar(p, end, '*');
-		const char* backtick = FindChar(p, end, '`');
-		const char* linkStart = nullptr;
-		for (const char* scan = p; scan < end;) {
-			const char* bracket = FindChar(scan, end, '[');
-			if (!bracket)
-				break;
-			const char* closeBracket = FindChar(bracket + 1, end, ']');
-			if (closeBracket && closeBracket + 1 < end &&
-				closeBracket[1] == '(' &&
-				FindChar(closeBracket + 2, end, ')')) {
-				linkStart = bracket;
-				break;
-			}
-			scan = bracket + 1;
-		}
-		const char* marker = nullptr;
-		if (doubleStar && backtick)
-			marker = doubleStar < backtick ? doubleStar : backtick;
-		else
-			marker = doubleStar ? doubleStar : backtick;
-		if (linkStart && (!marker || linkStart < marker))
-			marker = linkStart;
-
-		if (!marker) {
-			runs.push_back({p, end, 0});
-			return;
-		}
-		if (marker > p)
-			runs.push_back({p, marker, 0});
-		if (marker == linkStart) {
-			const char* closeBracket = FindChar(marker + 1, end, ']');
-			const char* urlClose = FindChar(closeBracket + 2, end, ')');
-			runs.push_back({marker + 1, closeBracket, 3});
-			runs.push_back({closeBracket + 1, urlClose + 1, 4});
-			p = urlClose + 1;
-		}
-		else if (*marker == '`') {
-			const char* closing = FindChar(marker + 1, end, '`');
-			if (!closing) {
-				runs.push_back({marker, end, 0});
-				return;
-			}
-			runs.push_back({marker + 1, closing, 2});
-			p = closing + 1;
-		}
-		else {
-			const char* closing = FindDoubleChar(marker + 2, end, '*');
-			if (!closing) {
-				runs.push_back({marker, end, 0});
-				return;
-			}
-			runs.push_back({marker + 2, closing, 1});
-			p = closing + 2;
-		}
-	}
-}
-
-unsigned DecodeUtf8(const char* s, const char* end, int* length) noexcept {
-	unsigned c = static_cast<unsigned char>(*s);
-	*length = 1;
-	if (c < 0x80)
-		return c;
-	if ((c & 0xE0) == 0xC0 && s + 1 < end) {
-		*length = 2;
-		return ((c & 0x1F) << 6) | (s[1] & 0x3F);
-	}
-	if ((c & 0xF0) == 0xE0 && s + 2 < end) {
-		*length = 3;
-		return ((c & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-	}
-	if ((c & 0xF8) == 0xF0 && s + 3 < end) {
-		*length = 4;
-		return ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
-			((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
-	}
-	return c;
-}
-
-// CJK and fullwidth characters allow a line break on either side.
-bool IsWideCodepoint(unsigned codepoint) noexcept {
-	return codepoint >= 0x1100 && (codepoint <= 0x11FF || codepoint >= 0x2E80);
-}
-
 // Flows one logical line as styled word units, wrapping at the window edge
 // and drawing through the draw list. SameLine chaining cannot survive a
 // wrapped segment (the next segment would start at the wrap edge), which is
 // why the layout is computed manually here.
 void RenderInlineRuns(
 	const char* begin, const char* end, ImFont* bold, ImFont* code) noexcept {
-	std::vector<MdRun> runs;
+	std::vector<coolhelper_shared::MarkdownInlineRun> runs;
 	try {
-		CollectRuns(begin, end, runs);
+		coolhelper_shared::CollectMarkdownInlineRuns(begin, end, runs);
 	}
 	catch (...) {
 		ImGui::TextUnformatted(begin, end);
@@ -260,30 +65,14 @@ void RenderInlineRuns(
 	const float startX = cursor.x;
 	const float right = startX + ImGui::GetContentRegionAvail().x;
 	float maxY = cursor.y + lineHeight;
-	auto wrapUnitEnd = [](const char* unitBegin, const char* runEnd) noexcept {
-		int charLen = 0;
-		const unsigned c = DecodeUtf8(unitBegin, runEnd, &charLen);
-		const char* unitEnd = unitBegin + charLen;
-		if (c != ' ' && !IsWideCodepoint(c)) {
-			while (unitEnd < runEnd) {
-				int nextLen = 0;
-				const unsigned next =
-					DecodeUtf8(unitEnd, runEnd, &nextLen);
-				if (next == ' ' || IsWideCodepoint(next))
-					break;
-				unitEnd += nextLen;
-			}
-		}
-		return unitEnd;
-	};
-
-	for (const MdRun& run : runs) {
+	for (const coolhelper_shared::MarkdownInlineRun& run : runs) {
 		ImFont* font = fonts[run.style];
 		const bool codeBg = run.style == 2;
 		const char* w = run.begin;
 		if (codeBg) {
 			while (w < run.end) {
-				const char* firstEnd = wrapUnitEnd(w, run.end);
+				const char* firstEnd =
+					coolhelper_shared::MarkdownWrapUnitEnd(w, run.end);
 				const float firstWidth = font->CalcTextSizeA(
 					font->FontSize, FLT_MAX, 0.0f, w, firstEnd).x;
 				if (cursor.x + firstWidth > right && cursor.x > startX) {
@@ -294,7 +83,8 @@ void RenderInlineRuns(
 				const char* segmentBegin = w;
 				float segmentWidth = 0.0f;
 				while (w < run.end) {
-					const char* unitEnd = wrapUnitEnd(w, run.end);
+					const char* unitEnd =
+						coolhelper_shared::MarkdownWrapUnitEnd(w, run.end);
 					const float unitWidth = font->CalcTextSizeA(
 						font->FontSize, FLT_MAX, 0.0f, w, unitEnd).x;
 					if (cursor.x + segmentWidth + unitWidth > right &&
@@ -322,7 +112,8 @@ void RenderInlineRuns(
 			continue;
 		}
 		while (w < run.end) {
-			const char* unitEnd = wrapUnitEnd(w, run.end);
+			const char* unitEnd =
+				coolhelper_shared::MarkdownWrapUnitEnd(w, run.end);
 			const float unitWidth = font->CalcTextSizeA(
 				font->FontSize, FLT_MAX, 0.0f, w, unitEnd).x;
 			if (cursor.x + unitWidth > right && cursor.x > startX) {
@@ -430,7 +221,19 @@ UiFrameResult OverlayUi::Build(
 
 void OverlayUi::BuildAnswerSection(
 	IAnswerProvider* answers, int scrollSteps) noexcept {
-	const AnswerState state = answers->GetAnswerState();
+	char errorBuffer[512] = {};
+	char progressBuffer[512] = {};
+	try {
+		answerBuffer_.resize(static_cast<size_t>(kAnswerCopyCapacity));
+	}
+	catch (...) {
+		answerBuffer_.clear();
+	}
+	const AnswerSnapshot snapshot = answers->CopySnapshot(
+		answerBuffer_.empty() ? nullptr : answerBuffer_.data(),
+		answerBuffer_.size(), errorBuffer, sizeof(errorBuffer),
+		progressBuffer, sizeof(progressBuffer));
+	const AnswerState state = snapshot.state;
 	switch (state) {
 	case AnswerState::Connecting:
 		ImGui::TextColored(ImVec4(0.45f, 0.68f, 0.95f, 1.0f),
@@ -464,13 +267,13 @@ void OverlayUi::BuildAnswerSection(
 		break;
 	}
 	ImGui::SameLine();
-	ImGui::TextDisabled(answers->IsHubConnected()
+	ImGui::TextDisabled(snapshot.hubConnected
 		? "CoolHelperHub \u5df2\u8fde\u63a5"
 		: "CoolHelperHub \u672a\u8fde\u63a5");
-	if (answers->HasStreamGap())
+	if (snapshot.streamGap)
 		ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
 			"\u6ce8\u610f\uff1a\u901a\u4fe1\u79ef\u538b\u5bfc\u81f4\u4e2a\u522b\u7247\u6bb5\u4e22\u5931");
-	if (answers->IsTruncated())
+	if (snapshot.truncated)
 		ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
 			"\u6ce8\u610f\uff1a\u5185\u5bb9\u8d85\u8fc7\u4e0a\u9650\uff0c\u5df2\u622a\u65ad");
 	ImGui::Separator();
@@ -484,16 +287,12 @@ void OverlayUi::BuildAnswerSection(
 	const bool atBottom = ImGui::GetScrollY() + ImGui::GetWindowHeight() >=
 		ImGui::GetScrollMaxY() - 4.0f;
 
-	char errorBuffer[512] = {};
-	answers->CopyErrorText(errorBuffer, sizeof(errorBuffer));
 	if (errorBuffer[0]) {
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.42f, 0.38f, 1.0f));
 		ImGui::TextWrapped("%s", errorBuffer);
 		ImGui::PopStyleColor();
 		ImGui::Separator();
 	}
-	char progressBuffer[512] = {};
-	answers->CopyProgressText(progressBuffer, sizeof(progressBuffer));
 	if (state == AnswerState::Thinking && progressBuffer[0]) {
 		ImGui::TextDisabled("模型推理：%s", progressBuffer);
 		ImGui::Separator();
@@ -507,16 +306,7 @@ void OverlayUi::BuildAnswerSection(
 		ImGui::Separator();
 	}
 
-	UINT64 length = 0;
-	try {
-		answerBuffer_.resize(static_cast<size_t>(kAnswerCopyCapacity));
-		length = answers->CopyAnswerText(
-			answerBuffer_.data(), answerBuffer_.size());
-		answerBuffer_[static_cast<size_t>(length)] = '\0';
-	}
-	catch (...) {
-		length = 0;
-	}
+	const UINT64 length = snapshot.answerLength;
 	if (length > 0) {
 		RenderMarkdown(answerBuffer_.data());
 	}
@@ -559,7 +349,8 @@ void OverlayUi::RenderBlockLines(
 	ImGui::PushTextWrapPos(0.0f);
 	const char* lineBegin = begin;
 	while (lineBegin < end) {
-		const char* lineEnd = FindChar(lineBegin, end, '\n');
+		const char* lineEnd =
+			coolhelper_shared::MarkdownFindChar(lineBegin, end, '\n');
 		if (!lineEnd)
 			lineEnd = end;
 		const char* contentEnd = lineEnd;
@@ -587,7 +378,8 @@ void OverlayUi::RenderBlockLines(
 			inCodeFence = true;
 			codeBuffer_.clear();
 		}
-		else if (IsBlankLine(lineBegin, contentEnd)) {
+		else if (coolhelper_shared::MarkdownIsBlankLine(
+			lineBegin, contentEnd)) {
 			ImGui::Dummy(ImVec2(0.0f, ImGui::GetTextLineHeight() * 0.40f));
 		}
 		else {
@@ -606,18 +398,21 @@ void OverlayUi::RenderBlockLines(
 				tableRows_.clear();
 				const char* scan = lineBegin;
 				while (scan < end && tableRows_.size() < 64) {
-					const char* scanEnd = FindChar(scan, end, '\n');
+					const char* scanEnd =
+						coolhelper_shared::MarkdownFindChar(scan, end, '\n');
 					if (!scanEnd)
 						scanEnd = end;
 					const char* cellEnd = scanEnd;
 					while (cellEnd > scan &&
 						(cellEnd[-1] == '\r' || cellEnd[-1] == ' '))
 						--cellEnd;
-					const char* cellStart = SkipSpaces(scan, cellEnd);
+					const char* cellStart =
+						coolhelper_shared::MarkdownSkipSpaces(scan, cellEnd);
 					if (cellStart >= cellEnd || cellStart[0] != '|')
 						break;
 					tableRows_.emplace_back();
-					if (!ParseTableRow(cellStart, cellEnd, &tableRows_.back())) {
+					if (!coolhelper_shared::MarkdownParseTableRow(
+						cellStart, cellEnd, &tableRows_.back())) {
 						tableRows_.pop_back();
 						break;
 					}
@@ -628,7 +423,7 @@ void OverlayUi::RenderBlockLines(
 					tableRows_[0].size() <= 8) {
 					bool separatorOk = true;
 					for (const std::string& cell : tableRows_[1]) {
-						if (!IsTableSeparatorCell(cell)) {
+						if (!coolhelper_shared::MarkdownIsTableSeparatorCell(cell)) {
 							separatorOk = false;
 							break;
 						}
@@ -651,12 +446,13 @@ void OverlayUi::RenderBlockLines(
 
 				const bool isHr = contentEnd - p >= 3 &&
 					(p[0] == '-' || p[0] == '*' || p[0] == '_') &&
-					IsHorizontalRule(p, contentEnd);
+					coolhelper_shared::MarkdownIsHorizontalRule(p, contentEnd);
 				const bool isBullet = contentEnd - p >= 2 &&
 					(p[0] == '-' || p[0] == '*' || p[0] == '+') && p[1] == ' ';
 				const char* orderedContent = nullptr;
 				const bool isOrdered =
-					!isHr && ParseOrderedListMarker(p, contentEnd, &orderedContent);
+					!isHr && coolhelper_shared::MarkdownParseOrderedListMarker(
+						p, contentEnd, &orderedContent);
 				const bool isQuote = p[0] == '>';
 				int headingLevel = 0;
 				if (p < contentEnd && p[0] == '#') {
@@ -689,7 +485,8 @@ void OverlayUi::RenderBlockLines(
 					RenderInlineRuns(orderedContent, contentEnd, fontBold_, fontCode_);
 				}
 				else if (isQuote) {
-					const char* quoteText = SkipSpaces(p + 1, contentEnd);
+					const char* quoteText =
+						coolhelper_shared::MarkdownSkipSpaces(p + 1, contentEnd);
 					ImGui::Indent(10.0f);
 					ImGui::PushStyleColor(ImGuiCol_Text,
 						ImGui::ColorConvertU32ToFloat4(kQuoteColor));
@@ -704,7 +501,9 @@ void OverlayUi::RenderBlockLines(
 					ImGui::Unindent(10.0f);
 				}
 				else if (headingLevel > 0) {
-					const char* headingText = SkipSpaces(p + headingLevel, contentEnd);
+					const char* headingText =
+						coolhelper_shared::MarkdownSkipSpaces(
+							p + headingLevel, contentEnd);
 					ImGui::Dummy(ImVec2(0.0f, ImGui::GetTextLineHeight() * 0.20f));
 					ImGui::PushStyleColor(ImGuiCol_Text,
 						ImGui::ColorConvertU32ToFloat4(kHeadingColor));

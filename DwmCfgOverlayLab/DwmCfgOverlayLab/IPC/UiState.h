@@ -21,20 +21,26 @@ enum class AnswerState : UINT32 {
 	Cancelled
 };
 
+struct AnswerSnapshot {
+	bool hubConnected = false;
+	AnswerState state = AnswerState::Idle;
+	UINT64 epoch = 0;
+	UINT64 answerLength = 0;
+	UINT64 errorLength = 0;
+	UINT64 progressLength = 0;
+	bool streamGap = false;
+	bool truncated = false;
+};
+
 // Read-only view of the answer text received over IPC. Implemented by the IPC
 // service; OverlayUi consumes it on the Present thread.
 class IAnswerProvider {
 public:
 	virtual ~IAnswerProvider() = default;
-	virtual bool IsHubConnected() const noexcept = 0;
-	virtual AnswerState GetAnswerState() const noexcept = 0;
-	virtual UINT64 GetAnswerEpoch() const noexcept = 0;
-	virtual UINT64 CopyAnswerText(char* buffer, UINT64 capacity) const noexcept = 0;
-	virtual UINT64 CopyErrorText(char* buffer, UINT64 capacity) const noexcept = 0;
-	virtual UINT64 CopyProgressText(char* buffer, UINT64 capacity) const noexcept = 0;
-
-	virtual bool HasStreamGap() const noexcept = 0;
-	virtual bool IsTruncated() const noexcept = 0;
+	virtual AnswerSnapshot CopySnapshot(
+		char* answerBuffer, UINT64 answerCapacity,
+		char* errorBuffer, UINT64 errorCapacity,
+		char* progressBuffer, UINT64 progressCapacity) const noexcept = 0;
 };
 
 // Three buffers keep Present-side reads wait-free. The IPC worker never

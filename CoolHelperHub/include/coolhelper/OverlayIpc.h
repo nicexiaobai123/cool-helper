@@ -17,15 +17,19 @@ namespace coolhelper {
 // DwmCfgOverlayLab's IPC/AnswerIpc.h; keep both copies byte-identical.
 namespace overlayipc {
 
-constexpr UINT32 kIpcProtocolVersion = 1;
+constexpr UINT32 kIpcProtocolVersion = 2;
+constexpr UINT32 kIpcCapabilityProgress = 1u << 0;
+constexpr UINT32 kIpcCapabilityUtf8Chunking = 1u << 1;
+constexpr UINT32 kIpcCapabilities =
+	kIpcCapabilityProgress | kIpcCapabilityUtf8Chunking;
 constexpr UINT32 kIpcSlotCount = 128; // power of two; slot selection uses a mask
 constexpr UINT32 kIpcSlotSize = 64 * 1024;
 constexpr UINT32 kIpcMessageHeaderSize = 24;
 constexpr UINT32 kIpcMaxPayload = kIpcSlotSize - kIpcMessageHeaderSize;
 constexpr UINT32 kIpcMessageFlagContinuation = 0x1;
 constexpr UINT64 kIpcHeartbeatTimeoutMs = 8000;
-inline constexpr wchar_t kIpcSectionName[] = L"Local\\CoolHelper.Overlay.Answer.v1";
-inline constexpr wchar_t kIpcReadyEventName[] = L"Local\\CoolHelper.Overlay.Answer.Ready.v1";
+inline constexpr wchar_t kIpcSectionName[] = L"Local\\CoolHelper.Overlay.Answer.v2";
+inline constexpr wchar_t kIpcReadyEventName[] = L"Local\\CoolHelper.Overlay.Answer.Ready.v2";
 
 #pragma pack(push, 8)
 struct IpcSharedHeader {
@@ -34,6 +38,8 @@ struct IpcSharedHeader {
 	UINT32 slotCount;
 	UINT32 slotSize;
 	UINT32 slotDataOffset;
+	volatile UINT32 hubCapabilities;
+	volatile UINT32 dllCapabilities;
 	UINT32 reserved0;
 	volatile UINT64 hubHeartbeatTick;
 	volatile UINT64 dllHeartbeatTick;
@@ -52,7 +58,7 @@ struct IpcMessageHeader {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(IpcSharedHeader) == 64, "layout must match DwmCfgOverlayLab");
+static_assert(sizeof(IpcSharedHeader) == 72, "layout must match DwmCfgOverlayLab");
 static_assert(sizeof(IpcMessageHeader) == kIpcMessageHeaderSize,
 	"layout must match DwmCfgOverlayLab");
 

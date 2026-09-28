@@ -11,15 +11,19 @@ namespace dwm_overlay {
 // Shared transport contract with CoolHelperHub's OverlayIpc sink. The two
 // projects do not share headers, so every constant, struct, and field order
 // here must stay byte-identical with CoolHelperHub's src/OverlayIpc.cpp.
-constexpr UINT32 kIpcProtocolVersion = 1;
+constexpr UINT32 kIpcProtocolVersion = 2;
+constexpr UINT32 kIpcCapabilityProgress = 1u << 0;
+constexpr UINT32 kIpcCapabilityUtf8Chunking = 1u << 1;
+constexpr UINT32 kIpcCapabilities =
+	kIpcCapabilityProgress | kIpcCapabilityUtf8Chunking;
 constexpr UINT32 kIpcSlotCount = 128; // power of two; slot selection uses a mask
 constexpr UINT32 kIpcSlotSize = 64 * 1024;
 constexpr UINT32 kIpcMessageHeaderSize = 24;
 constexpr UINT32 kIpcMaxPayload = kIpcSlotSize - kIpcMessageHeaderSize;
 constexpr UINT32 kIpcMessageFlagContinuation = 0x1;
 constexpr UINT64 kIpcHeartbeatTimeoutMs = 8000;
-constexpr wchar_t kIpcSectionName[] = L"Local\\CoolHelper.Overlay.Answer.v1";
-constexpr wchar_t kIpcReadyEventName[] = L"Local\\CoolHelper.Overlay.Answer.Ready.v1";
+constexpr wchar_t kIpcSectionName[] = L"Local\\CoolHelper.Overlay.Answer.v2";
+constexpr wchar_t kIpcReadyEventName[] = L"Local\\CoolHelper.Overlay.Answer.Ready.v2";
 
 enum class IpcMessageType : UINT32 {
 	Started = 0,
@@ -38,6 +42,8 @@ struct IpcSharedHeader {
 	UINT32 slotCount;
 	UINT32 slotSize;
 	UINT32 slotDataOffset;
+	volatile UINT32 hubCapabilities;
+	volatile UINT32 dllCapabilities;
 	UINT32 reserved0;
 	volatile UINT64 hubHeartbeatTick;
 	volatile UINT64 dllHeartbeatTick;
@@ -56,9 +62,10 @@ struct IpcMessageHeader {
 };
 #pragma pack(pop)
 
-static_assert(sizeof(IpcSharedHeader) == 64, "layout must match CoolHelperHub");
+static_assert(sizeof(IpcSharedHeader) == 72, "layout must match CoolHelperHub");
 static_assert(sizeof(IpcMessageHeader) == kIpcMessageHeaderSize,
-	"layout must match CoolHelperHub");static_assert((kIpcSlotCount & (kIpcSlotCount - 1)) == 0,
+	"layout must match CoolHelperHub");
+static_assert((kIpcSlotCount & (kIpcSlotCount - 1)) == 0,
 	"slot count must be a power of two");
 
 // Consumes the hub's answer stream without ever blocking the compositor: the
@@ -75,14 +82,10 @@ public:
 	void Stop() noexcept;
 
 	// IAnswerProvider (called on the Present thread).
-	bool IsHubConnected() const noexcept override;
-	AnswerState GetAnswerState() const noexcept override;
-	UINT64 GetAnswerEpoch() const noexcept override;
-	UINT64 CopyAnswerText(char* buffer, UINT64 capacity) const noexcept override;
-	UINT64 CopyErrorText(char* buffer, UINT64 capacity) const noexcept override;
-	UINT64 CopyProgressText(char* buffer, UINT64 capacity) const noexcept override;
-	bool HasStreamGap() const noexcept override;
-	bool IsTruncated() const noexcept override;
+	AnswerSnapshot CopySnapshot(
+		char* answerBuffer, UINT64 answerCapacity,
+		char* errorBuffer, UINT64 errorCapacity,
+		char* progressBuffer, UINT64 progressCapacity) const noexcept override;
 
 private:
 	static DWORD WINAPI WorkerProc(void* context) noexcept;
@@ -107,6 +110,7 @@ private:
 	AnswerState state_ = AnswerState::Idle;
 	UINT64 epoch_ = 0;
 	UINT64 lastSequence_ = 0;
+	bool hubConnected_ = false;
 	bool streamGap_ = false;
 	bool truncated_ = false;
 	bool attachedLogged_ = false;

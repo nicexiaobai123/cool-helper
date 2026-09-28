@@ -240,6 +240,7 @@ void OverlayRenderer::LoadUiFonts() noexcept {
 }
 
 bool OverlayRenderer::RebuildUiFonts() noexcept {
+	const ULONGLONG startedAt = GetTickCount64();
 	ImGuiIO& io = ImGui::GetIO();
 	ImGui_ImplDX11_InvalidateDeviceObjects();
 	io.Fonts->Clear();
@@ -255,6 +256,9 @@ bool OverlayRenderer::RebuildUiFonts() noexcept {
 	// Cached draw data contains UVs from the previous atlas. Force a fresh UI
 	// frame before it can be rendered with the replacement texture.
 	nextFrameQpc_ = 0;
+	DWM_LOG_FORMAT("Font atlas ready in %llu ms (%d x %d)",
+		static_cast<unsigned long long>(GetTickCount64() - startedAt),
+		io.Fonts->TexWidth, io.Fonts->TexHeight);
 	return true;
 }
 
@@ -453,11 +457,11 @@ void OverlayRenderer::RenderFrame(
 		constexpr UINT64 kScanCapacity = 512 * 1024 + 2;
 		if (glyphScanBuffer_.size() < kScanCapacity)
 			glyphScanBuffer_.resize(static_cast<size_t>(kScanCapacity));
-		const UINT64 length = answerProvider_->CopyAnswerText(
-			glyphScanBuffer_.data(), glyphScanBuffer_.size());
-		const AnswerState answerState = answerProvider_->GetAnswerState();
-		ScanMissingGlyphs(answerProvider_->GetAnswerEpoch(), length,
-			answerState == AnswerState::Completed);
+		const AnswerSnapshot answer = answerProvider_->CopySnapshot(
+			glyphScanBuffer_.data(), glyphScanBuffer_.size(),
+			nullptr, 0, nullptr, 0);
+		ScanMissingGlyphs(answer.epoch, answer.answerLength,
+			answer.state == AnswerState::Completed);
 	}
 
 	if (ShouldBuildFrame(backBufferDescription.Width,

@@ -449,207 +449,15 @@ constexpr ImU32 kMdInlineCodeBackground = IM_COL32(255, 255, 255, 22);
 constexpr ImU32 kMdTableLine = IM_COL32(255, 255, 255, 34);
 constexpr ImU32 kMdTableHeaderLine = IM_COL32(96, 165, 250, 170);
 
-const char* MdFindChar(const char* begin, const char* end, char value) noexcept {
-	const void* found = memchr(begin, value, static_cast<size_t>(end - begin));
-	return static_cast<const char*>(found);
-}
-
-const char* MdFindDoubleChar(const char* begin, const char* end, char value) noexcept {
-	for (const char* scan = begin; scan + 1 < end; ++scan) {
-		if (scan[0] == value && scan[1] == value)
-			return scan;
-	}
-	return nullptr;
-}
-
-const char* MdSkipSpaces(const char* p, const char* end) noexcept {
-	while (p < end && (*p == ' ' || *p == '\t'))
-		++p;
-	return p;
-}
-
-bool MdIsBlankLine(const char* begin, const char* end) noexcept {
-	for (const char* p = begin; p < end; ++p) {
-		if (*p != ' ' && *p != '\t')
-			return false;
-	}
-	return true;
-}
-
-bool MdIsHorizontalRule(const char* begin, const char* end) noexcept {
-	for (const char* p = begin; p < end; ++p) {
-		if (*p != begin[0] && *p != ' ')
-			return false;
-	}
-	return true;
-}
-
-bool MdParseOrderedListMarker(
-	const char* p, const char* end, const char** contentBegin) noexcept {
-	if (p >= end || *p < '0' || *p > '9')
-		return false;
-	const char* q = p;
-	int digits = 0;
-	while (q < end && *q >= '0' && *q <= '9' && digits < 4) {
-		++q;
-		++digits;
-	}
-	if (q + 1 < end && (*q == '.' || *q == ')') && q[1] == ' ') {
-		*contentBegin = q + 2;
-		return true;
-	}
-	return false;
-}
-
-bool MdIsTableSeparatorCell(const std::string& cell) noexcept {
-	size_t index = 0;
-	const size_t size = cell.size();
-	while (index < size && (cell[index] == ' ' || cell[index] == '\t'))
-		++index;
-	if (index < size && cell[index] == ':')
-		++index;
-	size_t dashes = 0;
-	while (index < size && cell[index] == '-') {
-		++index;
-		++dashes;
-	}
-	if (index < size && cell[index] == ':')
-		++index;
-	while (index < size && (cell[index] == ' ' || cell[index] == '\t'))
-		++index;
-	return dashes >= 2 && index == size;
-}
-
-bool MdParseTableRow(
-	const char* begin, const char* end, std::vector<std::string>* cells) noexcept {
-	cells->clear();
-	const char* p = begin + 1; // caller guarantees begin[0] == '|'
-	std::string cell;
-	while (p <= end) {
-		if (p == end || *p == '|') {
-			size_t lead = 0;
-			size_t trail = cell.size();
-			while (lead < trail && (cell[lead] == ' ' || cell[lead] == '\t'))
-				++lead;
-			while (trail > lead && (cell[trail - 1] == ' ' || cell[trail - 1] == '\t'))
-				--trail;
-			cells->emplace_back(cell, lead, trail - lead);
-			cell.clear();
-			if (p == end)
-				break;
-			++p;
-			continue;
-		}
-		cell.push_back(*p++);
-	}
-	if (!cells->empty() && cells->back().empty())
-		cells->pop_back();
-	return !cells->empty();
-}
-
-// Splits a logical line into styled runs without touching ImGui state.
-struct MdRun {
-	const char* begin;
-	const char* end;
-	int style; // 0 plain, 1 bold, 2 code, 3 link text, 4 link url
-};
-
-void MdCollectRuns(const char* begin, const char* end, std::vector<MdRun>& runs) noexcept {
-	const char* p = begin;
-	while (p < end) {
-		const char* doubleStar = MdFindDoubleChar(p, end, '*');
-		const char* backtick = MdFindChar(p, end, '`');
-		const char* linkStart = nullptr;
-		for (const char* scan = p; scan < end;) {
-			const char* bracket = MdFindChar(scan, end, '[');
-			if (!bracket)
-				break;
-			const char* closeBracket = MdFindChar(bracket + 1, end, ']');
-			if (closeBracket && closeBracket + 1 < end &&
-				closeBracket[1] == '(' &&
-				MdFindChar(closeBracket + 2, end, ')')) {
-				linkStart = bracket;
-				break;
-			}
-			scan = bracket + 1;
-		}
-		const char* marker = nullptr;
-		if (doubleStar && backtick)
-			marker = doubleStar < backtick ? doubleStar : backtick;
-		else
-			marker = doubleStar ? doubleStar : backtick;
-		if (linkStart && (!marker || linkStart < marker))
-			marker = linkStart;
-
-		if (!marker) {
-			runs.push_back({p, end, 0});
-			return;
-		}
-		if (marker > p)
-			runs.push_back({p, marker, 0});
-		if (marker == linkStart) {
-			const char* closeBracket = MdFindChar(marker + 1, end, ']');
-			const char* urlClose = MdFindChar(closeBracket + 2, end, ')');
-			runs.push_back({marker + 1, closeBracket, 3});
-			runs.push_back({closeBracket + 1, urlClose + 1, 4});
-			p = urlClose + 1;
-		}
-		else if (*marker == '`') {
-			const char* closing = MdFindChar(marker + 1, end, '`');
-			if (!closing) {
-				runs.push_back({marker, end, 0});
-				return;
-			}
-			runs.push_back({marker + 1, closing, 2});
-			p = closing + 1;
-		}
-		else {
-			const char* closing = MdFindDoubleChar(marker + 2, end, '*');
-			if (!closing) {
-				runs.push_back({marker, end, 0});
-				return;
-			}
-			runs.push_back({marker + 2, closing, 1});
-			p = closing + 2;
-		}
-	}
-}
-
-unsigned MdDecodeUtf8(const char* s, const char* end, int* length) noexcept {
-	unsigned c = static_cast<unsigned char>(*s);
-	*length = 1;
-	if (c < 0x80)
-		return c;
-	if ((c & 0xE0) == 0xC0 && s + 1 < end) {
-		*length = 2;
-		return ((c & 0x1F) << 6) | (s[1] & 0x3F);
-	}
-	if ((c & 0xF0) == 0xE0 && s + 2 < end) {
-		*length = 3;
-		return ((c & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-	}
-	if ((c & 0xF8) == 0xF0 && s + 3 < end) {
-		*length = 4;
-		return ((c & 0x07) << 18) | ((s[1] & 0x3F) << 12) |
-			((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
-	}
-	return c;
-}
-
-// CJK and fullwidth characters allow a line break on either side.
-bool MdIsWideCodepoint(unsigned codepoint) noexcept {
-	return codepoint >= 0x1100 && (codepoint <= 0x11FF || codepoint >= 0x2E80);
-}
-
 // Flows one logical line as styled word units, wrapping at the window edge
 // and drawing through the draw list. SameLine chaining cannot survive a
 // wrapped segment (the next segment would start at the wrap edge), which is
 // why the layout is computed manually here.
 void MdRenderInlineRuns(
 	const char* begin, const char* end, ImFont* bold, ImFont* code) noexcept {
-	std::vector<MdRun> runs;
+	std::vector<coolhelper_shared::MarkdownInlineRun> runs;
 	try {
-		MdCollectRuns(begin, end, runs);
+		coolhelper_shared::CollectMarkdownInlineRuns(begin, end, runs);
 	}
 	catch (...) {
 		ImGui::TextUnformatted(begin, end);
@@ -677,30 +485,14 @@ void MdRenderInlineRuns(
 	const float startX = cursor.x;
 	const float right = startX + ImGui::GetContentRegionAvail().x;
 	float maxY = cursor.y + lineHeight;
-	auto wrapUnitEnd = [](const char* unitBegin, const char* runEnd) noexcept {
-		int charLen = 0;
-		const unsigned c = MdDecodeUtf8(unitBegin, runEnd, &charLen);
-		const char* unitEnd = unitBegin + charLen;
-		if (c != ' ' && !MdIsWideCodepoint(c)) {
-			while (unitEnd < runEnd) {
-				int nextLen = 0;
-				const unsigned next =
-					MdDecodeUtf8(unitEnd, runEnd, &nextLen);
-				if (next == ' ' || MdIsWideCodepoint(next))
-					break;
-				unitEnd += nextLen;
-			}
-		}
-		return unitEnd;
-	};
-
-	for (const MdRun& run : runs) {
+	for (const coolhelper_shared::MarkdownInlineRun& run : runs) {
 		ImFont* font = fonts[run.style];
 		const bool codeBg = run.style == 2;
 		const char* w = run.begin;
 		if (codeBg) {
 			while (w < run.end) {
-				const char* firstEnd = wrapUnitEnd(w, run.end);
+				const char* firstEnd =
+					coolhelper_shared::MarkdownWrapUnitEnd(w, run.end);
 				const float firstWidth = font->CalcTextSizeA(
 					font->FontSize, FLT_MAX, 0.0f, w, firstEnd).x;
 				if (cursor.x + firstWidth > right && cursor.x > startX) {
@@ -711,7 +503,8 @@ void MdRenderInlineRuns(
 				const char* segmentBegin = w;
 				float segmentWidth = 0.0f;
 				while (w < run.end) {
-					const char* unitEnd = wrapUnitEnd(w, run.end);
+					const char* unitEnd =
+						coolhelper_shared::MarkdownWrapUnitEnd(w, run.end);
 					const float unitWidth = font->CalcTextSizeA(
 						font->FontSize, FLT_MAX, 0.0f, w, unitEnd).x;
 					if (cursor.x + segmentWidth + unitWidth > right &&
@@ -739,7 +532,8 @@ void MdRenderInlineRuns(
 			continue;
 		}
 		while (w < run.end) {
-			const char* unitEnd = wrapUnitEnd(w, run.end);
+			const char* unitEnd =
+				coolhelper_shared::MarkdownWrapUnitEnd(w, run.end);
 			const float unitWidth = font->CalcTextSizeA(
 				font->FontSize, FLT_MAX, 0.0f, w, unitEnd).x;
 			if (cursor.x + unitWidth > right && cursor.x > startX) {
@@ -794,7 +588,8 @@ struct HubMarkdownRenderer {
 		ImGui::PushTextWrapPos(0.0f);
 		const char* lineBegin = begin;
 		while (lineBegin < end) {
-			const char* lineEnd = MdFindChar(lineBegin, end, '\n');
+			const char* lineEnd = coolhelper_shared::MarkdownFindChar(
+				lineBegin, end, '\n');
 			if (!lineEnd)
 				lineEnd = end;
 			const char* contentEnd = lineEnd;
@@ -823,7 +618,8 @@ struct HubMarkdownRenderer {
 				inCodeFence = true;
 				codeBuffer_.clear();
 			}
-			else if (MdIsBlankLine(lineBegin, contentEnd)) {
+			else if (coolhelper_shared::MarkdownIsBlankLine(
+				lineBegin, contentEnd)) {
 				ImGui::Dummy(ImVec2(0.0f, ImGui::GetTextLineHeight() * 0.40f));
 			}
 			else {
@@ -840,18 +636,21 @@ struct HubMarkdownRenderer {
 					tableRows.clear();
 					const char* scan = lineBegin;
 					while (scan < end && tableRows.size() < 64) {
-						const char* scanEnd = MdFindChar(scan, end, '\n');
+						const char* scanEnd =
+							coolhelper_shared::MarkdownFindChar(scan, end, '\n');
 						if (!scanEnd)
 							scanEnd = end;
 						const char* cellEnd = scanEnd;
 						while (cellEnd > scan &&
 							(cellEnd[-1] == '\r' || cellEnd[-1] == ' '))
 							--cellEnd;
-						const char* cellStart = MdSkipSpaces(scan, cellEnd);
+						const char* cellStart =
+							coolhelper_shared::MarkdownSkipSpaces(scan, cellEnd);
 						if (cellStart >= cellEnd || cellStart[0] != '|')
 							break;
 						tableRows.emplace_back();
-						if (!MdParseTableRow(cellStart, cellEnd,
+						if (!coolhelper_shared::MarkdownParseTableRow(
+							cellStart, cellEnd,
 							&tableRows.back())) {
 							tableRows.pop_back();
 							break;
@@ -863,7 +662,7 @@ struct HubMarkdownRenderer {
 						tableRows[0].size() <= 8) {
 						bool separatorOk = true;
 						for (const std::string& cell : tableRows[1]) {
-							if (!MdIsTableSeparatorCell(cell)) {
+							if (!coolhelper_shared::MarkdownIsTableSeparatorCell(cell)) {
 								separatorOk = false;
 								break;
 							}
@@ -886,13 +685,14 @@ struct HubMarkdownRenderer {
 
 					const bool isHr = contentEnd - p >= 3 &&
 						(p[0] == '-' || p[0] == '*' || p[0] == '_') &&
-						MdIsHorizontalRule(p, contentEnd);
+						coolhelper_shared::MarkdownIsHorizontalRule(p, contentEnd);
 					const bool isBullet = contentEnd - p >= 2 &&
 						(p[0] == '-' || p[0] == '*' || p[0] == '+') &&
 						p[1] == ' ';
 					const char* orderedContent = nullptr;
 					const bool isOrdered = !isHr &&
-						MdParseOrderedListMarker(p, contentEnd, &orderedContent);
+						coolhelper_shared::MarkdownParseOrderedListMarker(
+							p, contentEnd, &orderedContent);
 					const bool isQuote = p[0] == '>';
 					int headingLevel = 0;
 					if (p < contentEnd && p[0] == '#') {
@@ -925,7 +725,8 @@ struct HubMarkdownRenderer {
 						MdRenderInlineRuns(orderedContent, contentEnd, bold, code);
 					}
 					else if (isQuote) {
-						const char* quoteText = MdSkipSpaces(p + 1, contentEnd);
+						const char* quoteText =
+							coolhelper_shared::MarkdownSkipSpaces(p + 1, contentEnd);
 						ImGui::Indent(10.0f);
 						ImGui::PushStyleColor(ImGuiCol_Text,
 							ImGui::ColorConvertU32ToFloat4(kMdQuoteColor));
@@ -941,7 +742,8 @@ struct HubMarkdownRenderer {
 					}
 					else if (headingLevel > 0) {
 						const char* headingText =
-							MdSkipSpaces(p + headingLevel, contentEnd);
+							coolhelper_shared::MarkdownSkipSpaces(
+								p + headingLevel, contentEnd);
 						ImGui::Dummy(ImVec2(0.0f,
 							ImGui::GetTextLineHeight() * 0.20f));
 						ImGui::PushStyleColor(ImGuiCol_Text,

@@ -114,7 +114,9 @@ bool AnswerIpcService::TryAttach() noexcept {
 	if (view->protocolVersion != kIpcProtocolVersion ||
 		view->headerSize != sizeof(IpcSharedHeader) ||
 		view->slotCount != kIpcSlotCount ||
-		view->slotSize != kIpcSlotSize) {
+		view->slotSize != kIpcSlotSize ||
+		view->slotDataOffset != sizeof(IpcSharedHeader) ||
+		(view->hubCapabilities & kIpcCapabilities) != kIpcCapabilities) {
 		DWM_LOG("Answer IPC version mismatch; waiting for a compatible hub");
 		UnmapViewOfFile(view);
 		CloseHandle(mapping);
@@ -133,6 +135,10 @@ bool AnswerIpcService::TryAttach() noexcept {
 	header_ = view;
 	readyEvent_ = readyEvent;
 	ResetModel();
+	AcquireSRWLockExclusive(&modelLock_);
+	hubConnected_ = true;
+	ReleaseSRWLockExclusive(&modelLock_);
+	header_->dllCapabilities = kIpcCapabilities;
 	header_->dllHeartbeatTick = GetTickCount64();
 	if (!attachedLogged_) {
 		DWM_LOG("Answer IPC attached to CoolHelperHub");
@@ -150,7 +156,13 @@ void AnswerIpcService::Detach(const char* reason) noexcept {
 		CloseHandle(readyEvent_);
 		readyEvent_ = nullptr;
 	}
+	// Publish the disconnected state while the mapping is still valid. Present
+	// never dereferences header_, so unmapping cannot race with a UI snapshot.
+	ResetModel();
 	if (header_) {
+		header_->dllHeartbeatTick = 0;
+		header_->dllCapabilities = 0;
+		MemoryBarrier();
 		UnmapViewOfFile(header_);
 		header_ = nullptr;
 	}
@@ -158,7 +170,6 @@ void AnswerIpcService::Detach(const char* reason) noexcept {
 		CloseHandle(mapping_);
 		mapping_ = nullptr;
 	}
-	ResetModel();
 }
 
 void AnswerIpcService::ResetModel() noexcept {
@@ -169,6 +180,7 @@ void AnswerIpcService::ResetModel() noexcept {
 	state_ = AnswerState::Idle;
 	epoch_ = 0;
 	lastSequence_ = 0;
+	hubConnected_ = false;
 	streamGap_ = false;
 	truncated_ = false;
 	ReleaseSRWLockExclusive(&modelLock_);
@@ -307,63 +319,25 @@ void AnswerIpcService::ApplyMessage(
 	ReleaseSRWLockExclusive(&modelLock_);
 }
 
-bool AnswerIpcService::IsHubConnected() const noexcept {
-	const IpcSharedHeader* header = header_;
-	if (!header)
-		return false;
-	return HeartbeatFresh(header->hubHeartbeatTick);
-}
-
-AnswerState AnswerIpcService::GetAnswerState() const noexcept {
+AnswerSnapshot AnswerIpcService::CopySnapshot(
+	char* answerBuffer, UINT64 answerCapacity,
+	char* errorBuffer, UINT64 errorCapacity,
+	char* progressBuffer, UINT64 progressCapacity) const noexcept {
+	AnswerSnapshot snapshot = {};
 	AcquireSRWLockShared(&modelLock_);
-	const AnswerState state = state_;
+	snapshot.hubConnected = hubConnected_;
+	snapshot.state = state_;
+	snapshot.epoch = epoch_;
+	snapshot.answerLength = CopyTextInto(
+		answerBuffer, answerCapacity, answerText_);
+	snapshot.errorLength = CopyTextInto(
+		errorBuffer, errorCapacity, errorText_);
+	snapshot.progressLength = CopyTextInto(
+		progressBuffer, progressCapacity, progressText_);
+	snapshot.streamGap = streamGap_;
+	snapshot.truncated = truncated_;
 	ReleaseSRWLockShared(&modelLock_);
-	return state;
-}
-
-UINT64 AnswerIpcService::GetAnswerEpoch() const noexcept {
-	AcquireSRWLockShared(&modelLock_);
-	const UINT64 epoch = epoch_;
-	ReleaseSRWLockShared(&modelLock_);
-	return epoch;
-}
-
-UINT64 AnswerIpcService::CopyAnswerText(
-	char* buffer, UINT64 capacity) const noexcept {
-	AcquireSRWLockShared(&modelLock_);
-	const UINT64 copied = CopyTextInto(buffer, capacity, answerText_);
-	ReleaseSRWLockShared(&modelLock_);
-	return copied;
-}
-
-UINT64 AnswerIpcService::CopyErrorText(
-	char* buffer, UINT64 capacity) const noexcept {
-	AcquireSRWLockShared(&modelLock_);
-	const UINT64 copied = CopyTextInto(buffer, capacity, errorText_);
-	ReleaseSRWLockShared(&modelLock_);
-	return copied;
-}
-
-UINT64 AnswerIpcService::CopyProgressText(
-	char* buffer, UINT64 capacity) const noexcept {
-	AcquireSRWLockShared(&modelLock_);
-	const UINT64 copied = CopyTextInto(buffer, capacity, progressText_);
-	ReleaseSRWLockShared(&modelLock_);
-	return copied;
-}
-
-bool AnswerIpcService::HasStreamGap() const noexcept {
-	AcquireSRWLockShared(&modelLock_);
-	const bool gap = streamGap_;
-	ReleaseSRWLockShared(&modelLock_);
-	return gap;
-}
-
-bool AnswerIpcService::IsTruncated() const noexcept {
-	AcquireSRWLockShared(&modelLock_);
-	const bool truncated = truncated_;
-	ReleaseSRWLockShared(&modelLock_);
-	return truncated;
+	return snapshot;
 }
 
 } // namespace dwm_overlay

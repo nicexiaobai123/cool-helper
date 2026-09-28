@@ -1,10 +1,248 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace coolhelper_shared {
+
+enum MarkdownInlineStyle : int {
+	MarkdownPlain = 0,
+	MarkdownBold = 1,
+	MarkdownCode = 2,
+	MarkdownLinkText = 3,
+	MarkdownLinkUrl = 4
+};
+
+struct MarkdownInlineRun {
+	const char* begin;
+	const char* end;
+	int style;
+};
+
+inline const char* MarkdownFindChar(
+	const char* begin, const char* end, char value) noexcept {
+	const void* found = std::memchr(
+		begin, value, static_cast<std::size_t>(end - begin));
+	return static_cast<const char*>(found);
+}
+
+inline const char* MarkdownFindDoubleChar(
+	const char* begin, const char* end, char value) noexcept {
+	for (const char* scan = begin; scan + 1 < end; ++scan) {
+		if (scan[0] == value && scan[1] == value)
+			return scan;
+	}
+	return nullptr;
+}
+
+inline const char* MarkdownSkipSpaces(
+	const char* position, const char* end) noexcept {
+	while (position < end && (*position == ' ' || *position == '\t'))
+		++position;
+	return position;
+}
+
+inline bool MarkdownIsBlankLine(
+	const char* begin, const char* end) noexcept {
+	for (const char* position = begin; position < end; ++position) {
+		if (*position != ' ' && *position != '\t')
+			return false;
+	}
+	return true;
+}
+
+inline bool MarkdownIsHorizontalRule(
+	const char* begin, const char* end) noexcept {
+	if (begin >= end)
+		return false;
+	for (const char* position = begin; position < end; ++position) {
+		if (*position != begin[0] && *position != ' ')
+			return false;
+	}
+	return true;
+}
+
+inline bool MarkdownParseOrderedListMarker(
+	const char* position, const char* end,
+	const char** contentBegin) noexcept {
+	if (position >= end || *position < '0' || *position > '9')
+		return false;
+	const char* markerEnd = position;
+	int digits = 0;
+	while (markerEnd < end && *markerEnd >= '0' && *markerEnd <= '9' &&
+		digits < 4) {
+		++markerEnd;
+		++digits;
+	}
+	if (markerEnd + 1 < end &&
+		(*markerEnd == '.' || *markerEnd == ')') && markerEnd[1] == ' ') {
+		*contentBegin = markerEnd + 2;
+		return true;
+	}
+	return false;
+}
+
+inline bool MarkdownIsTableSeparatorCell(const std::string& cell) noexcept {
+	std::size_t index = 0;
+	const std::size_t size = cell.size();
+	while (index < size && (cell[index] == ' ' || cell[index] == '\t'))
+		++index;
+	if (index < size && cell[index] == ':')
+		++index;
+	std::size_t dashes = 0;
+	while (index < size && cell[index] == '-') {
+		++index;
+		++dashes;
+	}
+	if (index < size && cell[index] == ':')
+		++index;
+	while (index < size && (cell[index] == ' ' || cell[index] == '\t'))
+		++index;
+	return dashes >= 2 && index == size;
+}
+
+inline bool MarkdownParseTableRow(
+	const char* begin, const char* end,
+	std::vector<std::string>* cells) {
+	cells->clear();
+	const char* position = begin + 1; // caller guarantees begin[0] == '|'
+	std::string cell;
+	while (position <= end) {
+		if (position == end || *position == '|') {
+			std::size_t lead = 0;
+			std::size_t trail = cell.size();
+			while (lead < trail &&
+				(cell[lead] == ' ' || cell[lead] == '\t'))
+				++lead;
+			while (trail > lead &&
+				(cell[trail - 1] == ' ' || cell[trail - 1] == '\t'))
+				--trail;
+			cells->emplace_back(cell, lead, trail - lead);
+			cell.clear();
+			if (position == end)
+				break;
+			++position;
+			continue;
+		}
+		cell.push_back(*position++);
+	}
+	if (!cells->empty() && cells->back().empty())
+		cells->pop_back();
+	return !cells->empty();
+}
+
+inline void CollectMarkdownInlineRuns(
+	const char* begin, const char* end,
+	std::vector<MarkdownInlineRun>& runs) {
+	const char* position = begin;
+	while (position < end) {
+		const char* doubleStar = MarkdownFindDoubleChar(position, end, '*');
+		const char* backtick = MarkdownFindChar(position, end, '`');
+		const char* linkStart = nullptr;
+		for (const char* scan = position; scan < end;) {
+			const char* bracket = MarkdownFindChar(scan, end, '[');
+			if (!bracket)
+				break;
+			const char* closeBracket = MarkdownFindChar(bracket + 1, end, ']');
+			if (closeBracket && closeBracket + 1 < end &&
+				closeBracket[1] == '(' &&
+				MarkdownFindChar(closeBracket + 2, end, ')')) {
+				linkStart = bracket;
+				break;
+			}
+			scan = bracket + 1;
+		}
+		const char* marker = nullptr;
+		if (doubleStar && backtick)
+			marker = doubleStar < backtick ? doubleStar : backtick;
+		else
+			marker = doubleStar ? doubleStar : backtick;
+		if (linkStart && (!marker || linkStart < marker))
+			marker = linkStart;
+
+		if (!marker) {
+			runs.push_back({position, end, MarkdownPlain});
+			return;
+		}
+		if (marker > position)
+			runs.push_back({position, marker, MarkdownPlain});
+		if (marker == linkStart) {
+			const char* closeBracket = MarkdownFindChar(marker + 1, end, ']');
+			const char* urlClose = MarkdownFindChar(closeBracket + 2, end, ')');
+			runs.push_back({marker + 1, closeBracket, MarkdownLinkText});
+			runs.push_back({closeBracket + 1, urlClose + 1, MarkdownLinkUrl});
+			position = urlClose + 1;
+		}
+		else if (*marker == '`') {
+			const char* closing = MarkdownFindChar(marker + 1, end, '`');
+			if (!closing) {
+				runs.push_back({marker, end, MarkdownPlain});
+				return;
+			}
+			runs.push_back({marker + 1, closing, MarkdownCode});
+			position = closing + 1;
+		}
+		else {
+			const char* closing = MarkdownFindDoubleChar(marker + 2, end, '*');
+			if (!closing) {
+				runs.push_back({marker, end, MarkdownPlain});
+				return;
+			}
+			runs.push_back({marker + 2, closing, MarkdownBold});
+			position = closing + 2;
+		}
+	}
+}
+
+inline unsigned DecodeUtf8(
+	const char* text, const char* end, int* length) noexcept {
+	unsigned codepoint = static_cast<unsigned char>(*text);
+	*length = 1;
+	if (codepoint < 0x80)
+		return codepoint;
+	if ((codepoint & 0xE0) == 0xC0 && text + 1 < end) {
+		*length = 2;
+		return ((codepoint & 0x1F) << 6) | (text[1] & 0x3F);
+	}
+	if ((codepoint & 0xF0) == 0xE0 && text + 2 < end) {
+		*length = 3;
+		return ((codepoint & 0x0F) << 12) |
+			((text[1] & 0x3F) << 6) | (text[2] & 0x3F);
+	}
+	if ((codepoint & 0xF8) == 0xF0 && text + 3 < end) {
+		*length = 4;
+		return ((codepoint & 0x07) << 18) |
+			((text[1] & 0x3F) << 12) |
+			((text[2] & 0x3F) << 6) | (text[3] & 0x3F);
+	}
+	return codepoint;
+}
+
+inline bool IsWideCodepoint(unsigned codepoint) noexcept {
+	return codepoint >= 0x1100 &&
+		(codepoint <= 0x11FF || codepoint >= 0x2E80);
+}
+
+inline const char* MarkdownWrapUnitEnd(
+	const char* unitBegin, const char* runEnd) noexcept {
+	int charLength = 0;
+	const unsigned codepoint = DecodeUtf8(unitBegin, runEnd, &charLength);
+	const char* unitEnd = unitBegin + charLength;
+	if (codepoint != ' ' && !IsWideCodepoint(codepoint)) {
+		while (unitEnd < runEnd) {
+			int nextLength = 0;
+			const unsigned next = DecodeUtf8(unitEnd, runEnd, &nextLength);
+			if (next == ' ' || IsWideCodepoint(next))
+				break;
+			unitEnd += nextLength;
+		}
+	}
+	return unitEnd;
+}
+
 namespace detail {
 
 struct MathReplacement {

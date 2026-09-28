@@ -144,6 +144,7 @@ bool OverlayIpcSink::Start(std::string& error) noexcept {
 	header->slotCount = overlayipc::kIpcSlotCount;
 	header->slotSize = overlayipc::kIpcSlotSize;
 	header->slotDataOffset = sizeof(IpcSharedHeader);
+	header->hubCapabilities = overlayipc::kIpcCapabilities;
 	header->hubHeartbeatTick = GetTickCount64();
 
 	mapping_ = mapping;
@@ -201,6 +202,9 @@ void OverlayIpcSink::Stop() noexcept {
 		stopEvent_ = nullptr;
 	}
 	if (header_) {
+		header_->hubHeartbeatTick = 0;
+		header_->hubCapabilities = 0;
+		MemoryBarrier();
 		UnmapViewOfFile(header_);
 		header_ = nullptr;
 	}
@@ -220,7 +224,9 @@ bool OverlayIpcSink::IsConnected() const noexcept {
 	const IpcSharedHeader* header = header_;
 	if (!header)
 		return false;
-	return HeartbeatFresh(header->dllHeartbeatTick);
+	return HeartbeatFresh(header->dllHeartbeatTick) &&
+		(header->dllCapabilities & overlayipc::kIpcCapabilities) ==
+			overlayipc::kIpcCapabilities;
 }
 
 const char* OverlayIpcSink::DescribeStatus() const noexcept {
