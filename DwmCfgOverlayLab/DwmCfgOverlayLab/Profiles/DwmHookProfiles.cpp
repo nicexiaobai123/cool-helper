@@ -153,15 +153,16 @@ static const HookSpec kHookSpecifications[] = {
 	{
 		HookSiteId::Win11LegacyD2DPresent,
 		"Win11 CLegacySwapChain D2D PresentDWM/RDX",
-		L"dwmcore.dll", 26100, 26200, 0, 0xFFFF,
+		L"dwmcore.dll", 26100, 26200, 26100, 26100,
 		EnvironmentRequirement::Any,
 		ArgumentSource::Rdx, PresentKind::DxgiPresent,
 		kWin11LegacyD2DPresentVariants, _countof(kWin11LegacyD2DPresentVariants),
 		// Live KD: PDB 8CA96642735261D40542AA61D93E813B / age 1,
 		// function RVA=1BCBE0, call RVA=1BCC92, guard thunk RVA=308010.
-		// The file revision was not available, so require the exact PE identity.
-		CallSiteEncoding::RelativeCallToFothk, 0, 0xFFFF,
-		0x443000, 0x6FDE2E0A, 0x00440845
+		// As on Win10, accept cumulative-update revisions within the module
+		// build family only if both semantic patterns and the guard chain match.
+		// Image size, /Brepro stamp and checksum remain diagnostic, not gates.
+		CallSiteEncoding::RelativeCallToFothk
 	}
 };
 

@@ -83,20 +83,39 @@ int wmain(int argc, wchar_t** argv) {
             "System probe must read identity from the loaded image");
         SystemFingerprint profile = {};
         profile.osBuild = 26200;
+        profile.dwmcoreVersion = { 10, 0, 26100, 9278 };
         profile.dwmcoreImageSize = 0x443000;
         profile.dwmcoreImageStamp = 0x6FDE2E0A;
         profile.dwmcoreImageChecksum = 0x00440845;
-        // Intentionally no file version and no VMware flag: image identity
-        // is decisive, not a guessed revision or a GPU-dependent fallback.
-        for (unsigned field = 0; field < 4; ++field) {
+        // Bound OS/module families, but do not pin a cumulative-update
+        // revision, PE stamp, checksum, image size or VMware driver flag.
+        for (unsigned field = 0; field < 5; ++field) {
             auto rejected = profile;
-            if (field == 0) ++rejected.dwmcoreImageSize;
-            if (field == 1) ++rejected.dwmcoreImageStamp;
-            if (field == 2) ++rejected.dwmcoreImageChecksum;
-            if (field == 3) rejected.osBuild = 27000;
+            if (field == 0) rejected.osBuild = 26099;
+            if (field == 1) rejected.osBuild = 26201;
+            if (field == 2) rejected.dwmcoreVersion.build = 26099;
+            if (field == 3) rejected.dwmcoreVersion.build = 26101;
+            if (field == 4) rejected.dwmcoreVersion = {};
             const auto result = InstallCompatibleHookProfiles(rejected, hooks);
             Check(result.applicableHooks == 0 && hooks.InstalledCount() == 0,
-                "Unknown image/OS identity must be rejected");
+                "Unsupported OS/module build family must be rejected");
+        }
+        const WORD revisions[] = { 0, 5670, 9278, 0xFFFF };
+        for (unsigned index = 0; index < _countof(revisions); ++index) {
+            auto accepted = profile;
+            accepted.osBuild = index % 2 ? 26100 : 26200;
+            accepted.dwmcoreVersion.revision = revisions[index];
+            accepted.dwmcoreImageSize = index == 3 ? 0 : 0x443000 + index * 0x1000;
+            accepted.dwmcoreImageStamp = index == 3 ? 0 : 0x9A1AF3BA + index;
+            accepted.dwmcoreImageChecksum = index == 3 ? 0 : 0x004477E9 + index;
+            HookManager candidate;
+            const auto result = InstallCompatibleHookProfiles(accepted, candidate);
+            const bool restored = candidate.UninstallAll();
+            Check(restored && result.applicableHooks == 1 &&
+                result.resolvedHooks == 1 && result.installedHooks == 1,
+                "Matching patterns must accept different minor revisions/image metadata");
+            Check(std::memcmp(before.data(), code.codeBase, before.size()) == 0,
+                "Revision-compatibility test must restore .text");
         }
 
         const BYTE originalThunkOpcode = thunk[0];
@@ -177,7 +196,7 @@ int wmain(int argc, wchar_t** argv) {
         Check(hooks.UninstallAll(), "Repeated uninstall failed");
         Check(std::memcmp(before.data(), code.codeBase, before.size()) == 0,
             "Uninstall must restore .text byte-for-byte");
-        std::puts("PASS: image guards, unique Legacy call, RDX, 9 arguments, RX relay, exact restore");
+        std::puts("PASS: build guards, revision compatibility, unique Legacy call, RDX, 9 arguments, RX relay, exact restore");
         HookManager::SetActiveManager(nullptr);
         FreeLibrary(module);
         return 0;

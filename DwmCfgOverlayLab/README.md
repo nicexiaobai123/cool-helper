@@ -89,8 +89,8 @@ Bootstrap/Runtime
 1. Add one or more `PatternVariant` values in
    `Profiles/DwmHookProfiles.cpp`.
 2. Add a `HookSpec` with a narrow build range and the verified argument source.
-   If the file version is unavailable, require an exact PE identity
-   (`ImageSize`, `/Brepro` stamp, `CheckSum`) rather than guessing a revision.
+   Match the supported OS/module build families; cumulative-update revisions
+   can share a profile only while its semantic function/call patterns match.
 3. If the hook argument is not swap-chain compatible, add an adapter in
    `Render/FrameRouter.cpp`.
 4. Test that the function pattern is unique and that the selected instruction
@@ -112,20 +112,23 @@ Windows 11 has one debugger-verified Legacy presentation profile. The earlier
 unhit CD3DDevice Present/alternate/MPO RCX profiles for 26100.9168/9278 have
 been removed; they are no longer advertised as supported.
 
-| Verified image identity | Presentation contract |
+| Eligible build family | Presentation contract |
 | --- | --- |
-| ImageSize `0x443000`, /Brepro stamp `0x6FDE2E0A`, CheckSum `0x00440845` | `CLegacySwapChain::Present` -> D2D `PresentDWM`, swap chain in **RDX** |
+| OS builds `26100-26200`, dwmcore file build `26100` (any revision) | `CLegacySwapChain::Present` -> D2D `PresentDWM`, swap chain in **RDX** |
 
 KD confirmed the composition thread passes through `CLegacyRenderTarget`,
 `COverlayContext::Present`, and `CLegacySwapChain::Present`. At call RVA
 `0x1BCC92` (`Present+0xB2`), RAX resolves to D2D `PresentDWM` and RDX to
 `dxgi!CDXGISwapChainDWMLegacy`. The E8 calls the original guard thunk at RVA
 `0x308010`; its loader-retargeted E9 is preserved. RVAs are diagnostic only:
-installation requires the exact PE identity, a unique function/call pattern,
-and a validated fothk dispatch chain. The profile permits OS builds
-26100-26200 only with that exact image; it is **not** general Win11 support
-and is not gated on VMware driver names. Actual overlay drawing/ghosting
-validation on the target machine is still required.
+installation requires the supported OS/module build family, a unique
+function/call pattern (including RDX setup and vtable +68h), and a validated
+fothk dispatch chain. Minor revision, ImageSize, /Brepro stamp and CheckSum
+are not pinned; PE metadata is still logged for diagnosis. Missing file
+version or out-of-family builds fail closed. This is **not** general Win11
+support and is not gated on VMware driver names. Pattern compatibility does
+not prove every cumulative update renders correctly: actual overlay
+drawing/ghosting validation on the target machine is still required.
 
 The E8 relay saves the register context, routes RDX to the renderer, and
 returns to the original guard thunk; it does not replace the global CFG
@@ -141,8 +144,9 @@ ctest --test-dir ../analyze_result/win11_legacy_hook_tests_build -C Release --ou
 ```
 
 The CFG-enabled tests map a **synthetic fixture DLL** made from the supplied
-KD instruction bytes, not a system dwmcore DLL. They reject wrong image
-identities, ambiguous functions, wrong call contracts and malformed thunks;
+KD instruction bytes, not a system dwmcore DLL. They accept varied minor
+revisions/PE metadata when patterns match, but reject unsupported OS/module
+families, ambiguous functions, wrong call contracts and malformed thunks;
 install exactly one Legacy/RDX hook; check RX relay protection, all nine
 register/stack arguments, original dispatcher forwarding and return value;
 then verify byte-exact restore. They do not prove target-machine rendering.
