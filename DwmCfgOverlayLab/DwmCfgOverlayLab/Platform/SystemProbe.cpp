@@ -89,18 +89,23 @@ static ModuleVersion GetModuleVersion(HMODULE module) noexcept {
 	return result;
 }
 
-static DWORD GetImageSize(HMODULE module) noexcept {
+static void ReadImageIdentity(
+	HMODULE module,
+	SystemFingerprint& fingerprint) noexcept {
 	if (!module)
-		return 0;
+		return;
 	const auto base = reinterpret_cast<const BYTE*>(module);
 	const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
 	if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
-		return 0;
+		return;
 	const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
 		base + dos->e_lfanew);
-	if (nt->Signature != IMAGE_NT_SIGNATURE)
-		return 0;
-	return nt->OptionalHeader.SizeOfImage;
+	if (nt->Signature != IMAGE_NT_SIGNATURE ||
+		nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+		return;
+	fingerprint.dwmcoreImageSize = nt->OptionalHeader.SizeOfImage;
+	fingerprint.dwmcoreImageStamp = nt->FileHeader.TimeDateStamp;
+	fingerprint.dwmcoreImageChecksum = nt->OptionalHeader.CheckSum;
 }
 
 SystemFingerprint ProbeSystem() noexcept {
@@ -108,17 +113,19 @@ SystemFingerprint ProbeSystem() noexcept {
 	fingerprint.osBuild = GetWindowsBuildNumber();
 	const auto dwmcore = GetModuleHandleW(L"dwmcore.dll");
 	fingerprint.dwmcoreVersion = GetModuleVersion(dwmcore);
-	fingerprint.dwmcoreImageSize = GetImageSize(dwmcore);
+	ReadImageIdentity(dwmcore, fingerprint);
 	fingerprint.vmwareD3D = IsVmwareDwm();
 
 	DWM_LOG_FORMAT(
-		"System profile: build=%lu dwmcore=%u.%u.%u.%u image=0x%lX vmware=%s",
+		"System profile: build=%lu dwmcore=%u.%u.%u.%u image=0x%lX stamp=0x%08lX checksum=0x%08lX vmware=%s",
 		fingerprint.osBuild,
 		fingerprint.dwmcoreVersion.major,
 		fingerprint.dwmcoreVersion.minor,
 		fingerprint.dwmcoreVersion.build,
 		fingerprint.dwmcoreVersion.revision,
 		fingerprint.dwmcoreImageSize,
+		fingerprint.dwmcoreImageStamp,
+		fingerprint.dwmcoreImageChecksum,
 		fingerprint.vmwareD3D ? "yes" : "no");
 	return fingerprint;
 }

@@ -15,6 +15,8 @@ struct SystemFingerprint {
 	DWORD osBuild = 0;
 	ModuleVersion dwmcoreVersion = {};
 	DWORD dwmcoreImageSize = 0;
+	DWORD dwmcoreImageStamp = 0;
+	DWORD dwmcoreImageChecksum = 0;
 	bool vmwareD3D = false;
 };
 

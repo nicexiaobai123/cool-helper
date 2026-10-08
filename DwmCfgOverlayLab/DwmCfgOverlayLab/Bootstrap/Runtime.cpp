@@ -113,7 +113,7 @@ bool Runtime::Initialize() noexcept {
 	fingerprint_ = ProbeSystem();
 	const auto result = InstallCompatibleHookProfiles(fingerprint_, hooks_);
 	if (!result.installedHooks) {
-		DWM_LOG("No verified CFG call-site hook could be installed");
+		DWM_LOG("No verified presentation call-site hook could be installed");
 		HookManager::SetActiveManager(nullptr);
 		renderer_.Shutdown();
 		coordinator_.ReleaseOwner();

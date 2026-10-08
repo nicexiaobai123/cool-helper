@@ -10,6 +10,88 @@ static HookManager* volatile g_activeHookManager = nullptr;
 
 HookManager::HookManager() noexcept = default;
 
+static bool IsOwnedExecutableAddress(
+	HMODULE module,
+	const void* address) noexcept {
+	if (!IsExecutableAddress(address))
+		return false;
+	MEMORY_BASIC_INFORMATION information = {};
+	// Runtime dispatch thunks may occupy a loader-added executable page just
+	// beyond the PE's SizeOfImage. VirtualQuery identifies the actual mapping
+	// owner; a file-header bounds check incorrectly rejects those thunks.
+	return module && VirtualQuery(address, &information, sizeof(information)) &&
+		information.AllocationBase == module;
+}
+
+static bool IsOwnedExecutableAddress(
+	const wchar_t* moduleName,
+	const void* address) noexcept {
+	return IsOwnedExecutableAddress(GetModuleHandleW(moduleName), address);
+}
+
+static bool ValidateFothkCallTarget(
+	HMODULE module,
+	UINT64 target) noexcept {
+	ModuleSectionView fothk = {};
+	if (!TryGetModuleSection(module, "fothk", fothk))
+		return false;
+	const UINT64 sectionStart = reinterpret_cast<UINT64>(fothk.base);
+	if (target < sectionStart || target >= sectionStart + fothk.size ||
+		!IsReadableRange(reinterpret_cast<const void*>(target), 5) ||
+		*reinterpret_cast<const BYTE*>(target) != 0xE9)
+		return false;
+
+	const INT32 thunkDisplacement =
+		*reinterpret_cast<const INT32*>(target + 1);
+	const UINT64 dispatcherThunk = static_cast<UINT64>(
+		static_cast<INT64>(target + 5) + thunkDisplacement);
+	// The loader can retarget fothk's E9 straight to an ntdll dispatcher.
+	// The file image instead points to a module-local FF 25 dispatch thunk.
+	if (IsOwnedExecutableAddress(L"ntdll.dll",
+		reinterpret_cast<const void*>(dispatcherThunk)))
+		return true;
+	const void* thunkAddress = reinterpret_cast<const void*>(dispatcherThunk);
+	if (IsOwnedExecutableAddress(module, thunkAddress) &&
+		IsReadableRange(thunkAddress, 3)) {
+		const BYTE* bytes = static_cast<const BYTE*>(thunkAddress);
+		// The loader can also append a module-owned no-op dispatch stub.
+		if ((bytes[0] == 0xFF && bytes[1] == 0xE0) ||
+			(bytes[0] == 0x48 && bytes[1] == 0xFF && bytes[2] == 0xE0))
+			return true;
+	}
+	ModuleCodeView moduleView = {};
+	if (!TryGetModuleCodeView(module, moduleView))
+		return false;
+	const UINT64 moduleStart = reinterpret_cast<UINT64>(moduleView.imageBase);
+	const UINT64 moduleEnd = moduleStart + moduleView.imageSize;
+	if (dispatcherThunk < moduleStart || dispatcherThunk > moduleEnd - 6)
+		return false;
+	if (!IsReadableRange(reinterpret_cast<const void*>(dispatcherThunk), 6) ||
+		*reinterpret_cast<const WORD*>(dispatcherThunk) != 0x25FF)
+		return false;
+
+	const INT32 cellDisplacement =
+		*reinterpret_cast<const INT32*>(dispatcherThunk + 2);
+	const UINT64 cellAddress = static_cast<UINT64>(
+		static_cast<INT64>(dispatcherThunk + 6) + cellDisplacement);
+	if (cellAddress < moduleStart || cellAddress > moduleEnd - sizeof(void*) ||
+		!IsReadableRange(reinterpret_cast<const void*>(cellAddress),
+		sizeof(void*)))
+		return false;
+	const void* dispatcher = *reinterpret_cast<void* const*>(cellAddress);
+	if (IsOwnedExecutableAddress(L"ntdll.dll", dispatcher))
+		return true;
+
+	// Before, or without, loader redirection the GuardCF dispatch cell can
+	// still reference the module-local no-op dispatcher (jmp rax).
+	const UINT64 dispatcherAddress = reinterpret_cast<UINT64>(dispatcher);
+	return dispatcherAddress >= moduleStart &&
+		dispatcherAddress <= moduleEnd - sizeof(WORD) &&
+		IsExecutableAddress(dispatcher) &&
+		IsReadableRange(dispatcher, sizeof(WORD)) &&
+		*reinterpret_cast<const WORD*>(dispatcher) == 0xE0FF;
+}
+
 void HookManager::SetActiveManager(HookManager* manager) noexcept {
 	InterlockedExchangePointer(
 		reinterpret_cast<void* volatile*>(&g_activeHookManager), manager);
@@ -90,25 +172,102 @@ void** HookManager::AllocateDispatchCellNear(UINT64 callSite) noexcept {
 	return nullptr;
 }
 
+BYTE* HookManager::AllocateFothkRelayNear(
+	UINT64 callSite,
+	UINT64 originalCallTarget) noexcept {
+	SYSTEM_INFO systemInfo = {};
+	GetSystemInfo(&systemInfo);
+	const SIZE_T granularity = systemInfo.dwAllocationGranularity;
+	const UINT64 returnAddress = callSite + 5;
+	const UINT64 center = callSite & ~(static_cast<UINT64>(granularity) - 1);
+	const UINT64 maximumDistance = 0x7FFF0000ull;
+
+	for (UINT64 distance = granularity;
+		distance <= maximumDistance;
+		distance += granularity) {
+		const UINT64 candidates[] = {
+			center >= distance ? center - distance : 0,
+			center + distance
+		};
+		for (const UINT64 candidate : candidates) {
+			if (!candidate ||
+				candidate < reinterpret_cast<UINT64>(
+					systemInfo.lpMinimumApplicationAddress) ||
+				candidate > reinterpret_cast<UINT64>(
+					systemInfo.lpMaximumApplicationAddress))
+				continue;
+
+			auto relay = reinterpret_cast<BYTE*>(VirtualAlloc(
+				reinterpret_cast<void*>(candidate), granularity,
+				MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+			if (!relay)
+				continue;
+			const INT64 displacement = reinterpret_cast<UINT64>(relay) -
+				returnAddress;
+			if (displacement < INT32_MIN || displacement > INT32_MAX) {
+				VirtualFree(relay, 0, MEM_RELEASE);
+				continue;
+			}
+
+			// call qword ptr [rip+0Ah] -> bridge pointer at +10h
+			// jmp  qword ptr [rip+0Ch] -> original fothk pointer at +18h
+			static constexpr BYTE relayTemplate[16] = {
+				0xFF, 0x15, 0x0A, 0x00, 0x00, 0x00,
+				0xFF, 0x25, 0x0C, 0x00, 0x00, 0x00,
+				0xCC, 0xCC, 0xCC, 0xCC
+			};
+			memcpy(relay, relayTemplate, sizeof(relayTemplate));
+			const UINT64 bridge = reinterpret_cast<UINT64>(
+				AsmFothkCallSiteBridge);
+			memcpy(relay + 0x10, &bridge, sizeof(bridge));
+			memcpy(relay + 0x18, &originalCallTarget,
+				sizeof(originalCallTarget));
+
+			DWORD oldProtection = 0;
+			if (!VirtualProtect(relay, granularity, PAGE_EXECUTE_READ,
+				&oldProtection)) {
+				VirtualFree(relay, 0, MEM_RELEASE);
+				return nullptr;
+			}
+			FlushInstructionCache(GetCurrentProcess(), relay, 0x20);
+			return relay;
+		}
+	}
+	return nullptr;
+}
+
 bool HookManager::PatchDisplacementAtomic(
 	UINT64 callSite,
+	CallSiteEncoding encoding,
 	INT32 expectedDisplacement,
 	INT32 replacementDisplacement) noexcept {
-	if (*reinterpret_cast<const WORD*>(callSite) != 0x15FF) {
-		DWM_LOG("CFG call-site opcode changed before patching");
-		return false;
+	SIZE_T displacementOffsetFromCall = 0;
+	if (encoding == CallSiteEncoding::GuardDispatchRipIndirect) {
+		if (*reinterpret_cast<const WORD*>(callSite) != 0x15FF) {
+			DWM_LOG("CFG call-site opcode changed before patching");
+			return false;
+		}
+		displacementOffsetFromCall = 2;
 	}
-	if (*reinterpret_cast<const INT32*>(callSite + 2) != expectedDisplacement) {
-		DWM_LOG("CFG call-site displacement changed before patching");
+	else {
+		if (*reinterpret_cast<const BYTE*>(callSite) != 0xE8) {
+			DWM_LOG("fothk call-site opcode changed before patching");
+			return false;
+		}
+		displacementOffsetFromCall = 1;
+	}
+	if (*reinterpret_cast<const INT32*>(
+		callSite + displacementOffsetFromCall) != expectedDisplacement) {
+		DWM_LOG("Call-site displacement changed before patching");
 		return false;
 	}
 
-	const UINT64 displacementAddress = callSite + 2;
+	const UINT64 displacementAddress = callSite + displacementOffsetFromCall;
 	const UINT64 patchBlock = displacementAddress & ~0xFull;
 	const SIZE_T displacementOffset = static_cast<SIZE_T>(
 		displacementAddress - patchBlock);
 	if (displacementOffset + sizeof(INT32) > 16) {
-		DWM_LOG("CFG call displacement crosses an atomic patch block");
+		DWM_LOG("Call displacement crosses an atomic patch block");
 		return false;
 	}
 
@@ -122,7 +281,7 @@ bool HookManager::PatchDisplacementAtomic(
 	DWORD oldProtection = 0;
 	if (!VirtualProtect(reinterpret_cast<void*>(patchBlock), sizeof(replacement),
 		PAGE_EXECUTE_READWRITE, &oldProtection)) {
-		DWM_LOG("VirtualProtect on CFG call site failed");
+		DWM_LOG("VirtualProtect on call site failed");
 		return false;
 	}
 
@@ -138,7 +297,7 @@ bool HookManager::PatchDisplacementAtomic(
 	VirtualProtect(reinterpret_cast<void*>(patchBlock), sizeof(replacement),
 		oldProtection, &ignored);
 	if (!patched)
-		DWM_LOG("CFG call site changed concurrently; patch skipped");
+		DWM_LOG("Call site changed concurrently; patch skipped");
 	return patched != FALSE;
 }
 
@@ -152,59 +311,90 @@ bool HookManager::Install(
 		ReleaseSRWLockExclusive(&lock_);
 		return true;
 	}
-	if (hookCount_ >= kMaximumHooks ||
-		*reinterpret_cast<const WORD*>(callSite) != 0x15FF) {
+	const bool validOpcode = specification.callSiteEncoding ==
+		CallSiteEncoding::GuardDispatchRipIndirect
+		? *reinterpret_cast<const WORD*>(callSite) == 0x15FF
+		: *reinterpret_cast<const BYTE*>(callSite) == 0xE8;
+	if (hookCount_ >= kMaximumHooks || !validOpcode) {
 		ReleaseSRWLockExclusive(&lock_);
 		DWM_LOG_FORMAT("%s: invalid or unavailable hook slot", specification.name);
 		return false;
 	}
 
+	const SIZE_T displacementOffset = specification.callSiteEncoding ==
+		CallSiteEncoding::GuardDispatchRipIndirect ? 2 : 1;
+	const SIZE_T instructionLength = specification.callSiteEncoding ==
+		CallSiteEncoding::GuardDispatchRipIndirect ? 6 : 5;
 	const INT32 originalDisplacement =
-		*reinterpret_cast<const INT32*>(callSite + 2);
-	const UINT64 originalCellAddress = callSite + 6 + originalDisplacement;
-	if (!IsReadableRange(reinterpret_cast<const void*>(originalCellAddress),
-		sizeof(void*))) {
-		ReleaseSRWLockExclusive(&lock_);
-		DWM_LOG_FORMAT("%s: CFG dispatcher cell is not readable",
-			specification.name);
-		return false;
+		*reinterpret_cast<const INT32*>(callSite + displacementOffset);
+
+	void** dispatchCell = nullptr;
+	BYTE* relay = nullptr;
+	UINT64 originalCallTarget = 0;
+	INT64 displacement64 = 0;
+	UINT64 publishedReturnAddress = callSite + instructionLength;
+	if (specification.callSiteEncoding ==
+		CallSiteEncoding::GuardDispatchRipIndirect) {
+		const UINT64 originalCellAddress = static_cast<UINT64>(
+			static_cast<INT64>(callSite + instructionLength) +
+			originalDisplacement);
+		if (!IsReadableRange(reinterpret_cast<const void*>(originalCellAddress),
+			sizeof(void*))) {
+			ReleaseSRWLockExclusive(&lock_);
+			DWM_LOG_FORMAT("%s: CFG dispatcher cell is not readable",
+				specification.name);
+			return false;
+		}
+		const void* originalDispatcher =
+			*reinterpret_cast<void* const*>(originalCellAddress);
+		if (!IsOwnedExecutableAddress(L"ntdll.dll", originalDispatcher)) {
+			ReleaseSRWLockExclusive(&lock_);
+			DWM_LOG_FORMAT(
+				"%s: CFG dispatcher is not owned by ntdll; duplicate/foreign hook rejected",
+				specification.name);
+			return false;
+		}
+
+		dispatchCell = AllocateDispatchCellNear(callSite);
+		if (!dispatchCell) {
+			ReleaseSRWLockExclusive(&lock_);
+			DWM_LOG_FORMAT("%s: unable to allocate nearby dispatch cell",
+				specification.name);
+			return false;
+		}
+		*dispatchCell = reinterpret_cast<void*>(AsmLdrpDispatchUserCallTarget);
+		MemoryBarrier();
+		displacement64 = reinterpret_cast<UINT64>(dispatchCell) -
+			(callSite + instructionLength);
 	}
-	const void* originalDispatcher =
-		*reinterpret_cast<void* const*>(originalCellAddress);
-	if (!IsExecutableAddress(originalDispatcher)) {
-		ReleaseSRWLockExclusive(&lock_);
-		DWM_LOG_FORMAT("%s: CFG dispatcher target is not executable",
-			specification.name);
-		return false;
-	}
-	ModuleCodeView ntdllView = {};
-	const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-	const UINT64 dispatcherAddress =
-		reinterpret_cast<UINT64>(originalDispatcher);
-	if (!TryGetModuleCodeView(ntdll, ntdllView) ||
-		dispatcherAddress < reinterpret_cast<UINT64>(ntdllView.imageBase) ||
-		dispatcherAddress >= reinterpret_cast<UINT64>(ntdllView.imageBase) +
-			ntdllView.imageSize) {
-		ReleaseSRWLockExclusive(&lock_);
-		DWM_LOG_FORMAT(
-			"%s: CFG dispatcher is not owned by ntdll; duplicate/foreign hook rejected",
-			specification.name);
-		return false;
+	else {
+		originalCallTarget = static_cast<UINT64>(
+			static_cast<INT64>(callSite + instructionLength) +
+			originalDisplacement);
+		const HMODULE module = GetModuleHandleW(specification.moduleName);
+		if (!ValidateFothkCallTarget(module, originalCallTarget)) {
+			ReleaseSRWLockExclusive(&lock_);
+			DWM_LOG_FORMAT(
+				"%s: original fothk/XFG dispatch chain is invalid",
+				specification.name);
+			return false;
+		}
+		relay = AllocateFothkRelayNear(callSite, originalCallTarget);
+		if (!relay) {
+			ReleaseSRWLockExclusive(&lock_);
+			DWM_LOG_FORMAT("%s: unable to allocate nearby fothk relay",
+				specification.name);
+			return false;
+		}
+		displacement64 = reinterpret_cast<UINT64>(relay) -
+			(callSite + instructionLength);
+		// The relay's first absolute call returns to its second instruction.
+		publishedReturnAddress = reinterpret_cast<UINT64>(relay) + 6;
 	}
 
-	void** dispatchCell = AllocateDispatchCellNear(callSite);
-	if (!dispatchCell) {
-		ReleaseSRWLockExclusive(&lock_);
-		DWM_LOG_FORMAT("%s: unable to allocate nearby dispatch cell",
-			specification.name);
-		return false;
-	}
-	*dispatchCell = reinterpret_cast<void*>(AsmLdrpDispatchUserCallTarget);
-	MemoryBarrier();
-
-	const INT64 displacement64 = reinterpret_cast<UINT64>(dispatchCell) -
-		(callSite + 6);
 	if (displacement64 < INT32_MIN || displacement64 > INT32_MAX) {
+		if (relay)
+			VirtualFree(relay, 0, MEM_RELEASE);
 		ReleaseSRWLockExclusive(&lock_);
 		return false;
 	}
@@ -213,14 +403,19 @@ bool HookManager::Install(
 	instance.specification = &specification;
 	instance.callSite = callSite;
 	instance.dispatchCell = dispatchCell;
+	instance.relayAllocation = relay;
+	instance.originalCallTarget = originalCallTarget;
 	instance.originalDisplacement = originalDisplacement;
 	instance.patchedDisplacement = static_cast<INT32>(displacement64);
 	InterlockedExchange64(&instance.returnAddress,
-		static_cast<LONG64>(callSite + 6));
+		static_cast<LONG64>(publishedReturnAddress));
 
-	if (!PatchDisplacementAtomic(callSite, originalDisplacement,
+	if (!PatchDisplacementAtomic(callSite, specification.callSiteEncoding,
+		originalDisplacement,
 		instance.patchedDisplacement)) {
 		InterlockedExchange64(&instance.returnAddress, 0);
+		if (relay)
+			VirtualFree(relay, 0, MEM_RELEASE);
 		instance = {};
 		ReleaseSRWLockExclusive(&lock_);
 		return false;
@@ -280,13 +475,16 @@ void HookManager::Dispatch(const HookCpuContext& context) noexcept {
 		if (InterlockedCompareExchange(&acceptingCallbacks_, 0, 0) != 0) {
 			auto instance = FindByReturnAddress(context.returnAddress);
 			if (instance && instance->specification) {
-				InterlockedIncrement64(&instance->hitCount);
+				const LONG64 hits = InterlockedIncrement64(&instance->hitCount);
 				const HookInvocation invocation = {
 					instance->specification,
 					context.returnAddress,
 					reinterpret_cast<void*>(ReadArgument(
 						instance->specification->argumentSource, context))
 				};
+				if (hits == 1)
+					DWM_LOG_FORMAT("Hook first hit: %s argument=%p",
+						instance->specification->name, invocation.argument);
 				const auto callback = callback_;
 				if (callback)
 					callback(invocation);
@@ -307,6 +505,7 @@ bool HookManager::UninstallAll(DWORD callbackDrainTimeoutMs) noexcept {
 		if (!hook.installed)
 			continue;
 		if (!PatchDisplacementAtomic(hook.callSite,
+			hook.specification->callSiteEncoding,
 			hook.patchedDisplacement, hook.originalDisplacement)) {
 			restoredAll = false;
 			continue;
@@ -324,6 +523,11 @@ bool HookManager::UninstallAll(DWORD callbackDrainTimeoutMs) noexcept {
 		restoredAll = false;
 
 	if (restoredAll) {
+		for (auto& hook : hooks_) {
+			if (hook.relayAllocation)
+				VirtualFree(hook.relayAllocation, 0, MEM_RELEASE);
+			hook = {};
+		}
 		for (auto& arena : arenas_) {
 			if (arena.base)
 				VirtualFree(arena.base, 0, MEM_RELEASE);

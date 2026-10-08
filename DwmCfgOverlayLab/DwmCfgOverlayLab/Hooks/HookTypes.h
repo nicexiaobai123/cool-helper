@@ -15,7 +15,15 @@ enum class HookSiteId : UINT32 {
 	Win10LegacyD2DPresent,
 	Win10LegacyD2DPresentMpo,
 	Win10VmwarePresentInternal,
+	Win11LegacyD2DPresent,
 	ExperimentalD2DPresent
+};
+
+enum class CallSiteEncoding : UINT8 {
+	// call qword ptr [rip+disp32]
+	GuardDispatchRipIndirect,
+	// call rel32 into the module's fothk/XFG dispatch section
+	RelativeCallToFothk
 };
 
 enum class ArgumentSource : UINT8 {
@@ -44,6 +52,10 @@ struct PatternVariant {
 	SIZE_T callOrdinal;
 	bool requireUniqueCall;
 	const char* variantName;
+	// An empty pattern selects the legacy FF 15 matcher. Newer builds can
+	// describe the semantic bytes around a call and point at its opcode.
+	BytePattern callPattern = {};
+	SIZE_T callOpcodeOffset = 0;
 };
 
 struct HookSpec {
@@ -59,6 +71,16 @@ struct HookSpec {
 	PresentKind kind;
 	const PatternVariant* variants;
 	SIZE_T variantCount;
+	CallSiteEncoding callSiteEncoding =
+		CallSiteEncoding::GuardDispatchRipIndirect;
+	WORD minimumModuleRevision = 0;
+	WORD maximumModuleRevision = 0xFFFF;
+	DWORD requiredImageSize = 0;
+	// /Brepro images use TimeDateStamp as an image hash, not a build date.
+	// These optional fields identify debugger-verified images even when the
+	// file version is unavailable; patterns must still match uniquely.
+	DWORD requiredImageStamp = 0;
+	DWORD requiredImageChecksum = 0;
 };
 
 // This structure mirrors the register save area emitted by HookBridge.asm.

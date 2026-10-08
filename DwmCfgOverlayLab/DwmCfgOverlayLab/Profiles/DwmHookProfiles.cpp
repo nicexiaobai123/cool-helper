@@ -77,6 +77,30 @@ static const PatternVariant kLegacyVmwareVariants[] = {
 	}
 };
 
+// Verified in a live KD session: CLegacySwapChain::Present calls
+// d2d1!D2DDeviceContextBase<...>::PresentDWM through vtable +68h.
+// At this call RDX is dxgi!CDXGISwapChainDWMLegacy, not the wrapper's this.
+static const PatternVariant kWin11LegacyD2DPresentVariants[] = {
+	{
+		{
+			"\x48\x89\x5C\x24\x08\x44\x89\x44\x24\x18\x89\x54\x24\x10"
+			"\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48\x83\xEC\x60"
+			"\x33\xDB\x4C\x8B\xE9\x44\x8B\xFB\x41\xF6\xC0\x02\x0F\x85"
+			"\x00\x00\x00\x00",
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????"
+		},
+		0x60, 0x70, 0, true, "Win11 CLegacySwapChain::Present -> D2D PresentDWM",
+		{
+			"\x49\x8B\xD4\x48\x8B\x01\x48\x89\x5C\x24\x40\x89\x5C\x24\x38"
+			"\x48\x89\x5C\x24\x30\x48\x8B\x40\x68\x89\x7C\x24\x28"
+			"\x4C\x89\x7C\x24\x20\x44\x8B\xBC\x24\xB0\x00\x00\x00"
+			"\x45\x8B\xCF\xE8\x00\x00\x00\x00\x8B\xF8\x85\xC0",
+			"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx????xxxx"
+		},
+		44
+	}
+};
+
 static const HookSpec kHookSpecifications[] = {
 	{
 		HookSiteId::Win10DevicePresent,
@@ -125,6 +149,19 @@ static const HookSpec kHookSpecifications[] = {
 		EnvironmentRequirement::VmwareD3D,
 		ArgumentSource::Rdx, PresentKind::VmwarePresentInternal,
 		kLegacyVmwareVariants, _countof(kLegacyVmwareVariants)
+	},
+	{
+		HookSiteId::Win11LegacyD2DPresent,
+		"Win11 CLegacySwapChain D2D PresentDWM/RDX",
+		L"dwmcore.dll", 26100, 26200, 0, 0xFFFF,
+		EnvironmentRequirement::Any,
+		ArgumentSource::Rdx, PresentKind::DxgiPresent,
+		kWin11LegacyD2DPresentVariants, _countof(kWin11LegacyD2DPresentVariants),
+		// Live KD: PDB 8CA96642735261D40542AA61D93E813B / age 1,
+		// function RVA=1BCBE0, call RVA=1BCC92, guard thunk RVA=308010.
+		// The file revision was not available, so require the exact PE identity.
+		CallSiteEncoding::RelativeCallToFothk, 0, 0xFFFF,
+		0x443000, 0x6FDE2E0A, 0x00440845
 	}
 };
 
@@ -166,23 +203,57 @@ static UINT64 ResolveHookCallSite(const HookSpec& specification) noexcept {
 		}
 
 		try {
+			const BytePattern& callPattern = variant.callPattern.bytes
+				? variant.callPattern : kCfgCallPattern;
 			const auto calls = FindPatternMatchesInRange(
 				searchStart,
-				variant.callSearchLength, kCfgCallPattern,
+				variant.callSearchLength, callPattern,
 				variant.requireUniqueCall ? 2 : variant.callOrdinal + 1);
 			if (variant.requireUniqueCall && calls.size() != 1) {
-				DWM_LOG_FORMAT("%s: CFG call is missing or ambiguous",
+				DWM_LOG_FORMAT("%s: call site is missing or ambiguous",
 					variant.variantName);
 				continue;
 			}
 			if (calls.size() <= variant.callOrdinal) {
-				DWM_LOG_FORMAT("%s: CFG call ordinal %zu not found",
+				DWM_LOG_FORMAT("%s: call ordinal %zu not found",
 					variant.variantName, variant.callOrdinal);
 				continue;
 			}
-			DWM_LOG_FORMAT("Resolved %s with variant %s",
-				specification.name, variant.variantName);
-			return calls[variant.callOrdinal];
+			const UINT64 callSite = calls[variant.callOrdinal] +
+				variant.callOpcodeOffset;
+			if (callSite < calls[variant.callOrdinal] || callSite >= codeEnd) {
+				DWM_LOG_FORMAT("%s: call opcode offset is invalid",
+					variant.variantName);
+				continue;
+			}
+			if (specification.callSiteEncoding ==
+				CallSiteEncoding::RelativeCallToFothk) {
+				if (*reinterpret_cast<const BYTE*>(callSite) != 0xE8 ||
+					!IsReadableRange(reinterpret_cast<const void*>(callSite), 5)) {
+					DWM_LOG_FORMAT("%s: expected E8 rel32 call is missing",
+						variant.variantName);
+					continue;
+				}
+				const INT32 displacement =
+					*reinterpret_cast<const INT32*>(callSite + 1);
+				const UINT64 target = callSite + 5 + displacement;
+				ModuleSectionView fothk = {};
+				if (!TryGetModuleSection(module, "fothk", fothk) ||
+					target < reinterpret_cast<UINT64>(fothk.base) ||
+					target >= reinterpret_cast<UINT64>(fothk.base) + fothk.size) {
+					DWM_LOG_FORMAT("%s: E8 target is not in fothk",
+						variant.variantName);
+					continue;
+				}
+			}
+			DWM_LOG_FORMAT(
+				"Resolved %s with variant %s (function RVA=0x%llX call RVA=0x%llX)",
+				specification.name, variant.variantName,
+				static_cast<unsigned long long>(functionAddress -
+					reinterpret_cast<UINT64>(code.imageBase)),
+				static_cast<unsigned long long>(callSite -
+					reinterpret_cast<UINT64>(code.imageBase)));
+			return callSite;
 		}
 		catch (...) {
 			DWM_LOG_FORMAT("%s: call-site scan failed", variant.variantName);
@@ -200,6 +271,16 @@ ProfileInstallResult InstallCompatibleHookProfiles(
 			fingerprint.osBuild > specification.maximumBuild ||
 			fingerprint.dwmcoreVersion.build < specification.minimumModuleBuild ||
 			fingerprint.dwmcoreVersion.build > specification.maximumModuleBuild ||
+			fingerprint.dwmcoreVersion.revision <
+				specification.minimumModuleRevision ||
+			fingerprint.dwmcoreVersion.revision >
+				specification.maximumModuleRevision ||
+			(specification.requiredImageSize &&
+				fingerprint.dwmcoreImageSize != specification.requiredImageSize) ||
+			(specification.requiredImageStamp &&
+				fingerprint.dwmcoreImageStamp != specification.requiredImageStamp) ||
+			(specification.requiredImageChecksum &&
+				fingerprint.dwmcoreImageChecksum != specification.requiredImageChecksum) ||
 			!EnvironmentMatches(specification.environment, fingerprint))
 			continue;
 		++result.applicableHooks;
@@ -216,8 +297,13 @@ ProfileInstallResult InstallCompatibleHookProfiles(
 			++result.installedHooks;
 	}
 	if (!result.applicableHooks)
-		DWM_LOG_FORMAT("No verified hook profile for Windows build %lu",
-			fingerprint.osBuild);
+		DWM_LOG_FORMAT(
+			"No verified hook profile: OS=%lu dwmcore=%u.%u.%u.%u image=0x%lX stamp=0x%08lX checksum=0x%08lX",
+			fingerprint.osBuild,
+			fingerprint.dwmcoreVersion.major, fingerprint.dwmcoreVersion.minor,
+			fingerprint.dwmcoreVersion.build, fingerprint.dwmcoreVersion.revision,
+			fingerprint.dwmcoreImageSize,
+			fingerprint.dwmcoreImageStamp, fingerprint.dwmcoreImageChecksum);
 	return result;
 }
 

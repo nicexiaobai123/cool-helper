@@ -19,7 +19,16 @@ struct ModuleCodeView {
 	SIZE_T codeSize = 0;
 };
 
+struct ModuleSectionView {
+	const BYTE* base = nullptr;
+	SIZE_T size = 0;
+};
+
 bool TryGetModuleCodeView(HMODULE module, ModuleCodeView& view) noexcept;
+bool TryGetModuleSection(
+	HMODULE module,
+	const char* sectionName,
+	ModuleSectionView& view) noexcept;
 std::vector<UINT64> FindPatternMatches(
 	UINT64 address,
 	SIZE_T size,

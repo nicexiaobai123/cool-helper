@@ -39,10 +39,11 @@ Bootstrap/Runtime
 - `InstanceCoordinator` elects one owner per DWM process. A later DLL image is
   control-only and forwards `ShutdownDwmOverlay` to the owner instead of
   installing a second hook chain.
-- `HookManager` owns CFG call-site patches, nearby dispatch cells, hit routing,
-  and explicit unhook state.
-- `AsmHook.asm` only captures a generic register context and tail-jumps to the
-  original target. New RCX/RDX/R8/R9 paths do not require assembly changes.
+- `HookManager` owns CFG/fothk call-site patches, nearby dispatch cells or
+  executable relays, hit routing, and explicit unhook state.
+- `AsmHook.asm` captures a generic register context. The Win10 bridge
+  tail-jumps to the virtual target; the Win11 bridge returns through a nearby
+  relay and the original fothk/XFG dispatcher.
 - `FrameRouter` is the extension point for presentation objects that are not
   directly `IDXGISwapChain` compatible.
 - `OverlayRenderer` owns all D3D11 and ImGui state. `OverlayUi` has no knowledge
@@ -88,11 +89,13 @@ Bootstrap/Runtime
 1. Add one or more `PatternVariant` values in
    `Profiles/DwmHookProfiles.cpp`.
 2. Add a `HookSpec` with a narrow build range and the verified argument source.
+   If the file version is unavailable, require an exact PE identity
+   (`ImageSize`, `/Brepro` stamp, `CheckSum`) rather than guessing a revision.
 3. If the hook argument is not swap-chain compatible, add an adapter in
    `Render/FrameRouter.cpp`.
-4. Test that the function pattern is unique, the selected instruction is the
-   intended `FF 15 rel32` CFG dispatch call, and its original dispatcher target
-   is executable.
+4. Test that the function pattern is unique and that the selected instruction
+   is either the intended `FF 15 disp32` CFG dispatch call or an `E8 rel32`
+   whose decoded target belongs to the module's `fothk` section.
 5. Record the tested OS build, `dwmcore.dll` file version, physical/virtual GPU,
    and runtime hit count.
 
@@ -104,6 +107,45 @@ new version without verifying the argument contract in a debugger.
 - Windows 10 1909 / build 18363, VMware 3D (`vm3dum64*.dll`), with
   `dwmcore.dll 10.0.18362.752`.
 - Windows 10 22H2 / build 19045 on physical hardware.
+
+Windows 11 has one debugger-verified Legacy presentation profile. The earlier
+unhit CD3DDevice Present/alternate/MPO RCX profiles for 26100.9168/9278 have
+been removed; they are no longer advertised as supported.
+
+| Verified image identity | Presentation contract |
+| --- | --- |
+| ImageSize `0x443000`, /Brepro stamp `0x6FDE2E0A`, CheckSum `0x00440845` | `CLegacySwapChain::Present` -> D2D `PresentDWM`, swap chain in **RDX** |
+
+KD confirmed the composition thread passes through `CLegacyRenderTarget`,
+`COverlayContext::Present`, and `CLegacySwapChain::Present`. At call RVA
+`0x1BCC92` (`Present+0xB2`), RAX resolves to D2D `PresentDWM` and RDX to
+`dxgi!CDXGISwapChainDWMLegacy`. The E8 calls the original guard thunk at RVA
+`0x308010`; its loader-retargeted E9 is preserved. RVAs are diagnostic only:
+installation requires the exact PE identity, a unique function/call pattern,
+and a validated fothk dispatch chain. The profile permits OS builds
+26100-26200 only with that exact image; it is **not** general Win11 support
+and is not gated on VMware driver names. Actual overlay drawing/ghosting
+validation on the target machine is still required.
+
+The E8 relay saves the register context, routes RDX to the renderer, and
+returns to the original guard thunk; it does not replace the global CFG
+dispatcher. The first matched callback logs `Hook first hit: ... argument=...`
+independently of whether the renderer later obtains a back buffer.
+
+Isolated hook regression tests (no DWM injection):
+
+```powershell
+cmake -S tests -B ../analyze_result/win11_legacy_hook_tests_build -G "Visual Studio 16 2019" -A x64
+cmake --build ../analyze_result/win11_legacy_hook_tests_build --config Release
+ctest --test-dir ../analyze_result/win11_legacy_hook_tests_build -C Release --output-on-failure
+```
+
+The CFG-enabled tests map a **synthetic fixture DLL** made from the supplied
+KD instruction bytes, not a system dwmcore DLL. They reject wrong image
+identities, ambiguous functions, wrong call contracts and malformed thunks;
+install exactly one Legacy/RDX hook; check RX relay protection, all nine
+register/stack arguments, original dispatcher forwarding and return value;
+then verify byte-exact restore. They do not prove target-machine rendering.
 
 The profile table also targets the 18362/18363 and 19041-19045 build families,
 but every cumulative-update variant should be regression-tested before being

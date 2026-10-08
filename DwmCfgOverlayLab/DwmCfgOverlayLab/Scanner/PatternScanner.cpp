@@ -17,40 +17,75 @@ static bool PatternMatches(
 	return true;
 }
 
-bool TryGetModuleCodeView(HMODULE module, ModuleCodeView& view) noexcept {
-	view = {};
+static bool TryGetModuleHeaders(
+	HMODULE module,
+	const BYTE*& base,
+	const IMAGE_NT_HEADERS64*& nt) noexcept {
+	base = nullptr;
+	nt = nullptr;
 	if (!module)
 		return false;
 
-	const auto base = reinterpret_cast<const BYTE*>(module);
+	base = reinterpret_cast<const BYTE*>(module);
 	const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
 	if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0)
 		return false;
-	const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
+	nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(
 		base + dos->e_lfanew);
 	if (nt->Signature != IMAGE_NT_SIGNATURE ||
 		nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
 		return false;
+	return true;
+}
 
-	view.imageBase = base;
-	view.imageSize = nt->OptionalHeader.SizeOfImage;
+bool TryGetModuleSection(
+	HMODULE module,
+	const char* sectionName,
+	ModuleSectionView& view) noexcept {
+	view = {};
+	if (!sectionName)
+		return false;
+
+	const BYTE* base = nullptr;
+	const IMAGE_NT_HEADERS64* nt = nullptr;
+	if (!TryGetModuleHeaders(module, base, nt))
+		return false;
+
 	const auto sections = IMAGE_FIRST_SECTION(nt);
 	for (WORD index = 0; index < nt->FileHeader.NumberOfSections; ++index) {
 		char name[IMAGE_SIZEOF_SHORT_NAME + 1] = {};
 		memcpy(name, sections[index].Name, IMAGE_SIZEOF_SHORT_NAME);
-		if (strcmp(name, ".text") != 0)
+		if (strcmp(name, sectionName) != 0)
 			continue;
 
 		const SIZE_T virtualAddress = sections[index].VirtualAddress;
 		const SIZE_T virtualSize = sections[index].Misc.VirtualSize;
-		if (!virtualSize || virtualAddress >= view.imageSize ||
-			virtualSize > view.imageSize - virtualAddress)
+		const SIZE_T imageSize = nt->OptionalHeader.SizeOfImage;
+		if (!virtualSize || virtualAddress >= imageSize ||
+			virtualSize > imageSize - virtualAddress)
 			return false;
-		view.codeBase = base + virtualAddress;
-		view.codeSize = virtualSize;
+		view.base = base + virtualAddress;
+		view.size = virtualSize;
 		return true;
 	}
 	return false;
+}
+
+bool TryGetModuleCodeView(HMODULE module, ModuleCodeView& view) noexcept {
+	view = {};
+	const BYTE* base = nullptr;
+	const IMAGE_NT_HEADERS64* nt = nullptr;
+	if (!TryGetModuleHeaders(module, base, nt))
+		return false;
+
+	ModuleSectionView text = {};
+	if (!TryGetModuleSection(module, ".text", text))
+		return false;
+	view.imageBase = base;
+	view.imageSize = nt->OptionalHeader.SizeOfImage;
+	view.codeBase = text.base;
+	view.codeSize = text.size;
+	return true;
 }
 
 std::vector<UINT64> FindPatternMatches(

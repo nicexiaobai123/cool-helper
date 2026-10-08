@@ -31,6 +31,8 @@ private:
 		UINT64 callSite = 0;
 		volatile LONG64 returnAddress = 0;
 		void** dispatchCell = nullptr;
+		BYTE* relayAllocation = nullptr;
+		UINT64 originalCallTarget = 0;
 		INT32 originalDisplacement = 0;
 		INT32 patchedDisplacement = 0;
 		volatile LONG64 hitCount = 0;
@@ -44,8 +46,12 @@ private:
 	};
 
 	void** AllocateDispatchCellNear(UINT64 callSite) noexcept;
+	BYTE* AllocateFothkRelayNear(
+		UINT64 callSite,
+		UINT64 originalCallTarget) noexcept;
 	bool PatchDisplacementAtomic(
 		UINT64 callSite,
+		CallSiteEncoding encoding,
 		INT32 expectedDisplacement,
 		INT32 replacementDisplacement) noexcept;
 	HookInstance* FindByReturnAddress(UINT64 returnAddress) noexcept;
@@ -66,4 +72,5 @@ private:
 } // namespace dwm_overlay
 
 extern "C" void AsmLdrpDispatchUserCallTarget();
+extern "C" void AsmFothkCallSiteBridge();
 extern "C" void DispatchHook(dwm_overlay::HookCpuContext* context) noexcept;

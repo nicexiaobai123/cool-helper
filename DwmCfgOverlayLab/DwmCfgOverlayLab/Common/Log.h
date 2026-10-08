@@ -13,6 +13,9 @@ inline void Log(const char* message) noexcept {
 	// Keep the complete record in one debug event. DebugView treats every
 	// OutputDebugString call as an independent row.
 	OutputDebugStringA(line);
+#if defined(DWM_OVERLAY_TEST_LOG_STDERR)
+	std::fputs(line, stderr);
+#endif
 }
 
 inline void LogFormat(const char* format, ...) noexcept {
