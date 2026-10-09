@@ -23,6 +23,10 @@ class RenderSession final {
 public:
     bool Render(const FrameTarget& frame, const HookSpec& source,
         const UiSnapshot& snapshot, IAnswerProvider* answers, int scrollSteps, RECT& screenRect) noexcept;
+    // Only touch the current Present buffer, never retain native buffers or
+    // use the IPC worker to access D3D11. No UI/font work is done here.
+    bool RestoreWithoutUi(const FrameTarget& frame, RECT& screenRect) noexcept;
+    bool HasOverlayOutput() const noexcept;
     void Shutdown() noexcept;
     RenderSession() = default;
     ~RenderSession() { Shutdown(); }
@@ -49,7 +53,9 @@ private:
 	void ClearDeviceResources() noexcept;
     bool RenderFrame(const FrameTarget& frame, const UiSnapshot& snapshot,
         IAnswerProvider* answers, int scrollSteps, RECT& screenRect) noexcept;
-    BackdropCompositor* SelectBackdrop(const FrameTarget& frame) noexcept;
+    struct BackdropSlot;
+    BackdropSlot* FindBackdrop(const FrameTarget& frame) noexcept;
+    BackdropSlot* SelectBackdrop(const FrameTarget& frame) noexcept;
     void ClearBackdrops() noexcept;
 	void LogSourceOnce(const HookSpec& source) noexcept;
 
@@ -67,6 +73,8 @@ private:
 	bool hasCachedOverlayRect_ = false;
     struct BackdropSlot {
         UINT64 chain = 0, resource = 0, generation = 0;
+        RECT outputRect = {};
+        bool hasOverlay = false;
         BackdropCompositor compositor;
     };
     std::array<BackdropSlot, 8> backdrops_;

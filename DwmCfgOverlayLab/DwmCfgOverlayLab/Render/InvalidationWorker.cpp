@@ -8,7 +8,8 @@ BOOL CALLBACK InvalidationWorker::InvalidateIntersectingWindow(
 	LPARAM parameter) noexcept {
 	if (!IsWindowVisible(window) || IsIconic(window))
 		return TRUE;
-	const RECT& screenDirtyRect = *reinterpret_cast<const RECT*>(parameter);
+	const auto& request = *reinterpret_cast<const Invalidation*>(parameter);
+	const RECT& screenDirtyRect = request.screenRect;
 	RECT windowRect = {};
 	RECT intersection = {};
 	if (!GetWindowRect(window, &windowRect) ||
@@ -25,7 +26,7 @@ BOOL CALLBACK InvalidationWorker::InvalidateIntersectingWindow(
 		localPoints[1].x, localPoints[1].y
 	};
 	RedrawWindow(window, &localDirtyRect, nullptr,
-		RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN | RDW_NOERASE);
+		InvalidationFlags(request.eraseBackground, false));
 	return TRUE;
 }
 
@@ -38,16 +39,16 @@ DWORD InvalidationWorker::Run() noexcept {
 		if (WaitForSingleObject(event_, INFINITE) != WAIT_OBJECT_0)
 			return 0;
 		for (;;) {
-			RECT dirtyRect = {};
+			Invalidation request = {};
 			AcquireSRWLockExclusive(&lock_);
-			const bool hasWork = regions_.Take(dirtyRect);
+			const bool hasWork = regions_.Take(request.screenRect, request.eraseBackground);
 			ReleaseSRWLockExclusive(&lock_);
 			if (!hasWork)
 				break;
 			EnumWindows(InvalidateIntersectingWindow,
-				reinterpret_cast<LPARAM>(&dirtyRect));
-			RedrawWindow(GetDesktopWindow(), &dirtyRect, nullptr,
-				RDW_INVALIDATE | RDW_NOERASE);
+				reinterpret_cast<LPARAM>(&request));
+			RedrawWindow(GetDesktopWindow(), &request.screenRect, nullptr,
+				InvalidationFlags(request.eraseBackground, true));
 			DWM_LOG_ONCE("Moved overlay region invalidated asynchronously");
 		}
 		if (InterlockedCompareExchange(&stopping_, 0, 0) != 0)
@@ -104,6 +105,12 @@ void InvalidationWorker::QueueTarget(UINT64 key, bool hasCurrentRect, const RECT
 void InvalidationWorker::EraseAll() noexcept {
     AcquireSRWLockExclusive(&lock_);
     regions_.EraseAll();
+    ReleaseSRWLockExclusive(&lock_);
+    if (event_) SetEvent(event_);
+}
+void InvalidationWorker::QueueCleanupRect(const RECT& screenRect) noexcept {
+    AcquireSRWLockExclusive(&lock_);
+    regions_.CleanupRect(screenRect);
     ReleaseSRWLockExclusive(&lock_);
     if (event_) SetEvent(event_);
 }

@@ -347,10 +347,12 @@ void RenderSession::ClearBackdrops() noexcept {
     for (auto& slot : backdrops_) {
         slot.compositor.Shutdown();
         slot.chain = slot.resource = slot.generation = 0;
+        slot.hasOverlay = false;
+        slot.outputRect = {};
     }
 }
 
-BackdropCompositor* RenderSession::SelectBackdrop(const FrameTarget& frame) noexcept {
+RenderSession::BackdropSlot* RenderSession::FindBackdrop(const FrameTarget& frame) noexcept {
     for (auto& slot : backdrops_) {
         if (frame.generationIdentity && slot.chain == frame.chainIdentity &&
             slot.generation != frame.generationIdentity) {
@@ -358,22 +360,66 @@ BackdropCompositor* RenderSession::SelectBackdrop(const FrameTarget& frame) noex
             // chain generation, including same-size ResizeBuffers calls.
             slot.compositor.Shutdown();
             slot.chain = slot.resource = slot.generation = 0;
+            slot.hasOverlay = false;
+            slot.outputRect = {};
         }
     }
     for (auto& slot : backdrops_) {
         if (slot.chain == frame.chainIdentity && slot.resource == frame.resourceIdentity)
-            return &slot.compositor;
+            return &slot;
     }
+    return nullptr;
+}
+
+RenderSession::BackdropSlot* RenderSession::SelectBackdrop(const FrameTarget& frame) noexcept {
+    if (auto* slot = FindBackdrop(frame)) return slot;
     for (auto& slot : backdrops_) {
         if (!slot.resource) {
             slot.chain = frame.chainIdentity;
             slot.resource = frame.resourceIdentity;
             slot.generation = frame.generationIdentity;
-            return &slot.compositor;
+            return &slot;
         }
     }
     DWM_LOG_ONCE("Per-display buffer cache full; drawing skipped rather than mixing backgrounds");
     return nullptr;
+}
+
+bool RenderSession::HasOverlayOutput() const noexcept {
+    for (const auto& slot : backdrops_) if (slot.hasOverlay) return true;
+    return false;
+}
+
+bool RenderSession::RestoreWithoutUi(const FrameTarget& frame, RECT& screenRect) noexcept {
+    if (!frame.texture || !device_ || !context_) return false;
+    ComPtr<ID3D11Device> frameDevice;
+    frame.texture->GetDevice(&frameDevice);
+    if (frameDevice.Get() != device_.Get()) return false;
+    auto* slot = FindBackdrop(frame);
+    if (!slot || !slot->hasOverlay) return false;
+    if (frame.PrepareDraw && FAILED(frame.PrepareDraw(frame.operationContext, frame.plane,
+        frame.description.Width, frame.description.Height))) {
+        DWM_LOG_ONCE("Overlay cleanup: dirty-rect preparation failed; will retry");
+        return false;
+    }
+    {
+        D3D11OutputStateGuard stateGuard(context_.Get());
+        // Compare first: do not overwrite any new desktop composition with an
+        // aged snapshot while removing pixels still equal to our final output.
+        slot->compositor.CaptureRegion(context_.Get(), frame.texture.Get(), slot->outputRect);
+        if (!slot->compositor.RestoreBackdrop(context_.Get(), frame.texture.Get(), slot->outputRect))
+            return false;
+        slot->compositor.SaveOutput(context_.Get(), frame.texture.Get(), slot->outputRect);
+    }
+    if (frame.FinishDraw) frame.FinishDraw(context_.Get());
+    screenRect = slot->outputRect;
+    OffsetRect(&screenRect, frame.display.desktop.left, frame.display.desktop.top);
+    slot->hasOverlay = false;
+    // Cached UI data is not reused when the overlay is shown again.
+    nextFrameQpc_ = 0;
+    DWM_LOG_FORMAT("Overlay cleanup: background restored without UI (resource=%llu)",
+        static_cast<unsigned long long>(frame.resourceIdentity));
+    return true;
 }
 
 bool RenderSession::Render(const FrameTarget& frame, const HookSpec& source,
@@ -403,8 +449,9 @@ bool RenderSession::RenderFrame(const FrameTarget& frame, const UiSnapshot& snap
     ComPtr<ID3D11Device> frameDevice;
     backBuffer->GetDevice(&frameDevice);
     if (!frameDevice || !EnsureDevice(frameDevice.Get())) return false;
-    auto* compositor = SelectBackdrop(frame);
-    if (!compositor) return false;
+    auto* slot = SelectBackdrop(frame);
+    if (!slot) return false;
+    auto* compositor = &slot->compositor;
     ComPtr<ID3D11RenderTargetView> frameRenderTarget;
     if (FAILED(device_->CreateRenderTargetView(backBuffer, nullptr, &frameRenderTarget))) {
         DWM_LOG_ONCE("CreateRenderTargetView failed"); return false;
@@ -450,18 +497,30 @@ bool RenderSession::RenderFrame(const FrameTarget& frame, const UiSnapshot& snap
         DWM_LOG_ONCE("Frame target dirty-rect preparation failed; drawing skipped");
         return false;
     }
+    RECT dirtyRect = cachedOverlayRect_;
     {
         D3D11OutputStateGuard stateGuard(context_.Get());
         if (!compositor->EnsureSize(device_.Get(), backBufferDescription)) return false;
+        if (slot->hasOverlay && !EqualRect(&slot->outputRect, &cachedOverlayRect_)) {
+            // The previous position belongs to this rotating buffer, not the
+            // most recently presented buffer on another display/rotation.
+            compositor->CaptureRegion(context_.Get(), backBuffer, slot->outputRect);
+            if (!compositor->RestoreBackdrop(context_.Get(), backBuffer, slot->outputRect)) return false;
+            compositor->SaveOutput(context_.Get(), backBuffer, slot->outputRect);
+            UnionRect(&dirtyRect, &dirtyRect, &slot->outputRect);
+            slot->hasOverlay = false;
+        }
         compositor->CaptureRegion(context_.Get(), backBuffer, cachedOverlayRect_);
         if (!compositor->RestoreBackdrop(context_.Get(), backBuffer, cachedOverlayRect_)) return false;
         ID3D11RenderTargetView* target = frameRenderTarget.Get();
         context_->OMSetRenderTargets(1, &target, nullptr);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         compositor->SaveOutput(context_.Get(), backBuffer, cachedOverlayRect_);
+        slot->outputRect = cachedOverlayRect_;
+        slot->hasOverlay = true;
     }
     if (frame.FinishDraw) frame.FinishDraw(context_.Get());
-    screenRect = cachedOverlayRect_;
+    screenRect = dirtyRect;
     OffsetRect(&screenRect, frame.display.desktop.left, frame.display.desktop.top);
     return true;
 }

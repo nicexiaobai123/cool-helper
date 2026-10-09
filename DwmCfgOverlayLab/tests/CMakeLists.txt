@@ -82,6 +82,8 @@ set(imgui_sources
     ../DwmCfgOverlayLab/IMGUI/imgui_impl_dx11.cpp
     ../DwmCfgOverlayLab/IMGUI/imgui_impl_win32.cpp)
 add_executable(DwmRenderSessionTests RenderSessionTests.cpp ${imgui_sources}
+    ../DwmCfgOverlayLab/Render/OverlayRenderer.cpp
+    ../DwmCfgOverlayLab/Render/InvalidationWorker.cpp
     ../DwmCfgOverlayLab/Render/RenderSession.cpp
     ../DwmCfgOverlayLab/Render/FrameTarget.cpp
     ../DwmCfgOverlayLab/Render/DisplayTopology.cpp

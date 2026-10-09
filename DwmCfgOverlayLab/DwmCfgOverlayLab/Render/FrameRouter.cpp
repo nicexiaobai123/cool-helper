@@ -5,7 +5,7 @@
 namespace dwm_overlay {
 void FrameRouter::Route(const HookInvocation& invocation) noexcept {
     if (!invocation.specification || !invocation.argument ||
-        renderer_.IsDestroyed() || !renderer_.IsOverlayVisible()) return;
+        !renderer_.NeedsFrameProcessing()) return;
     FrameTarget frame;
     switch (invocation.specification->kind) {
     case PresentKind::DDisplayMultiplaneOverlay:

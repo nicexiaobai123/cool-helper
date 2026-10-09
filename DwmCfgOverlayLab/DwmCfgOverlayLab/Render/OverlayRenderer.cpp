@@ -13,9 +13,16 @@ bool OverlayRenderer::IsDestroyed() const noexcept {
 bool OverlayRenderer::IsOverlayVisible() const noexcept {
     return InterlockedCompareExchange(const_cast<volatile LONG*>(&visible_), 0, 0) != 0;
 }
+bool OverlayRenderer::NeedsFrameProcessing() const noexcept {
+    return !IsDestroyed() && (IsOverlayVisible() ||
+        InterlockedCompareExchange(const_cast<volatile LONG*>(&cleanupPending_), 0, 0) != 0);
+}
 void OverlayRenderer::SetOverlayVisible(bool visible) noexcept {
     if (InterlockedExchange(&visible_, visible ? 1 : 0) == (visible ? 1 : 0)) return;
-    if (!visible) invalidationWorker_.EraseAll();
+    if (!visible) {
+        InterlockedExchange(&cleanupPending_, 1);
+        invalidationWorker_.EraseAll();
+    }
     DWM_LOG(visible ? "Overlay shown by hub command" : "Overlay hidden by hub command");
 }
 void OverlayRenderer::SetCompatibilityDefault(DisplayMode mode) noexcept {
@@ -52,16 +59,24 @@ void OverlayRenderer::PruneSessions() noexcept {
     }
 }
 void OverlayRenderer::Render(const FrameTarget& frame, const HookSpec& source) noexcept {
-    if (!frame.texture || IsDestroyed() || !IsOverlayVisible() ||
+    if (!frame.texture || !NeedsFrameProcessing() ||
         InterlockedCompareExchange(&presentBusy_, 1, 0) != 0) return;
-    __try { RenderFrame(frame, source); }
+    __try { RenderFrame(frame, source); RefreshCleanupState(); }
     __finally { InterlockedExchange(&presentBusy_, 0); }
+}
+void OverlayRenderer::RefreshCleanupState() noexcept {
+    if (IsOverlayVisible()) return;
+    for (const auto& session : sessions_) {
+        if (session.renderer && session.renderer->HasOverlayOutput()) return;
+    }
+    if (InterlockedExchange(&cleanupPending_, 0))
+        DWM_LOG("Overlay cleanup complete; hidden frame processing idle");
 }
 void OverlayRenderer::RenderFrame(const FrameTarget& frame, const HookSpec& source) noexcept {
     const DisplayMode mode = GetDisplayMode();
     const auto fallback = static_cast<DisplayMode>(
         InterlockedCompareExchange(&compatibilityDefault_, 0, 0));
-    if (!AllowsDisplay(frame.display, mode, fallback)) return;
+    const bool drawUi = IsOverlayVisible() && AllowsDisplay(frame.display, mode, fallback);
     PruneSessions();
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     frame.texture->GetDevice(&device);
@@ -71,6 +86,14 @@ void OverlayRenderer::RenderFrame(const FrameTarget& frame, const HookSpec& sour
         if (session.renderer && session.key == frame.DisplayKey() && session.device.Get() == device.Get()) {
             selected = &session; break;
         }
+    }
+    // A hidden or excluded target still needs a cleanup pass on each buffer
+    // we previously drew into. Never create new sessions for cleanup.
+    if (!drawUi) {
+        RECT erased = {};
+        if (selected && selected->renderer->RestoreWithoutUi(frame, erased))
+            invalidationWorker_.QueueCleanupRect(erased);
+        return;
     }
     if (!selected) {
         for (auto& session : sessions_) if (!session.renderer) { selected = &session; break; }
@@ -108,7 +131,12 @@ void OverlayRenderer::RenderFrame(const FrameTarget& frame, const HookSpec& sour
         invalidationWorker_.QueueTarget(selected->key, true, screen);
     // A control command can race an in-flight frame. Erase its just-drawn region
     // too, not only regions tracked when the IPC worker received the command.
-    if (!IsOverlayVisible() || mode != GetDisplayMode()) invalidationWorker_.EraseAll();
+    if (!IsOverlayVisible() || !AllowsDisplay(frame.display, GetDisplayMode(), fallback)) {
+        RECT erased = {};
+        if (selected->renderer->RestoreWithoutUi(frame, erased))
+            invalidationWorker_.QueueCleanupRect(erased);
+        invalidationWorker_.EraseAll();
+    } else if (mode != GetDisplayMode()) invalidationWorker_.EraseAll();
 }
 void OverlayRenderer::Shutdown() noexcept {
     if (InterlockedExchange(&destroyed_, 1)) return;

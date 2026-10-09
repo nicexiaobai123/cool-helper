@@ -26,7 +26,7 @@ namespace dwm_overlay {
 class BackdropCompositor final {
 public:
 	// (Re)creates the region-sized resources; returns false when the backing
-	// device cannot support the pipeline and the caller should draw directly.
+	// device cannot support the pipeline and the caller must skip drawing.
 	bool EnsureSize(
 		ID3D11Device* device,
 		const D3D11_TEXTURE2D_DESC& backBufferDescription) noexcept;
@@ -40,7 +40,7 @@ public:
 
 	// Runs the discriminate pass on overlay-owned textures and copies the
 	// restored clean backdrop onto the back buffer region. Returns false when
-	// the shaders are unavailable; the caller then draws without a restore.
+	// the shaders are unavailable; the caller must skip drawing.
 	bool RestoreBackdrop(
 		ID3D11DeviceContext* context,
 		ID3D11Texture2D* backBuffer,

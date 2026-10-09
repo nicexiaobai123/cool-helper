@@ -114,6 +114,15 @@ monitor's desktop origin, including negative coordinates. Hide, policy changes
 and shutdown erase tracked regions across all outputs. This separation allows
 new presentation adapters without duplicating fonts, UI or display policy.
 
+Hiding does not immediately bypass Present: each previously painted rotating
+buffer gets a compare-and-restore pass without drawing UI, then hidden routing
+idles once no output needs cleanup. Fresh DWM pixels are preserved; native dirty
+preparation/flush still run on the Present thread, not the IPC worker. A hide
+racing an active draw cleans that same buffer before returning to Present.
+The invalidation worker requests background erase for hide/excluded targets,
+including desktop children; normal frame invalidation does not suppress an
+already pending erase. No blocking cross-process repaint is used.
+
 ## Adding a Windows build or presentation path
 
 1. Add one or more `PatternVariant` values in

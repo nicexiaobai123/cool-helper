@@ -18,6 +18,7 @@ public:
     bool IsDestroyed() const noexcept;
     void SetOverlayVisible(bool visible) noexcept;
     bool IsOverlayVisible() const noexcept;
+    bool NeedsFrameProcessing() const noexcept;
     void SetDisplayMode(DisplayMode mode) noexcept;
     DisplayMode GetDisplayMode() const noexcept;
     void SetCompatibilityDefault(DisplayMode mode) noexcept;
@@ -27,6 +28,7 @@ public:
 private:
     void RenderFrame(const FrameTarget& frame, const HookSpec& source) noexcept;
     void PruneSessions() noexcept;
+    void RefreshCleanupState() noexcept;
     struct Session {
         UINT64 key = 0;
         DisplayTarget display = {};
@@ -37,6 +39,7 @@ private:
     };
     std::array<Session, 8> sessions_;
     volatile LONG presentBusy_ = 0, destroyed_ = 0, visible_ = 1;
+    volatile LONG cleanupPending_ = 0;
     volatile LONG displayMode_ = static_cast<LONG>(DisplayMode::Compatible);
     volatile LONG compatibilityDefault_ = static_cast<LONG>(DisplayMode::PrimaryOnly);
     volatile LONG64 scrollPosition_ = 0;
