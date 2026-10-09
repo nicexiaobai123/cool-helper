@@ -29,7 +29,8 @@ Bootstrap/Runtime
   -> Profiles/DwmHookProfiles
   -> Scanner/PatternScanner
   -> Hooks/HookManager -> AsmHook.asm
-  -> Render/FrameRouter -> Render/OverlayRenderer
+  -> Render/FrameRouter -> Render/DDisplaySurfaceAdapter (Win11)
+                       -> Render/OverlayRenderer (shared)
   -> UI/OverlayUi <-> IPC/UiState
   -> IPC/AnswerIpc (CoolHelperHub answer stream)
 ```
@@ -94,8 +95,8 @@ Bootstrap/Runtime
 3. If the hook argument is not swap-chain compatible, add an adapter in
    `Render/FrameRouter.cpp`.
 4. Test that the function pattern is unique and that the selected instruction
-   is either the intended `FF 15 disp32` CFG dispatch call or an `E8 rel32`
-   whose decoded target belongs to the module's `fothk` section.
+   is either the intended `FF 15 disp32` CFG dispatch call, an `E8 rel32`
+   into `fothk`, or an explicitly verified local callee with its own adapter.
 5. Record the tested OS build, `dwmcore.dll` file version, physical/virtual GPU,
    and runtime hit count.
 
@@ -108,34 +109,76 @@ new version without verifying the argument contract in a debugger.
   `dwmcore.dll 10.0.18362.752`.
 - Windows 10 22H2 / build 19045 on physical hardware.
 
-Windows 11 has one debugger-verified Legacy presentation profile. The earlier
-unhit CD3DDevice Present/alternate/MPO RCX profiles for 26100.9168/9278 have
-been removed; they are no longer advertised as supported.
+Windows 11 retains the debugger-verified inlined Legacy profile:
+OS `26100-26200`, dwmcore file build `26100`, unique function/call patterns,
+RDX = `dxgi!CDXGISwapChainDWMLegacy`, original fothk dispatch preserved.
+This is not general Win11 rendering support. Unhit split-Legacy and other
+exploratory Present profiles/probes have been removed.
 
-| Eligible build family | Presentation contract |
-| --- | --- |
-| OS builds `26100-26200`, dwmcore file build `26100` (any revision) | `CLegacySwapChain::Present` -> D2D `PresentDWM`, swap chain in **RDX** |
+### Win11 DDisplay rendering
 
-KD confirmed the composition thread passes through `CLegacyRenderTarget`,
-`COverlayContext::Present`, and `CLegacySwapChain::Present`. At call RVA
-`0x1BCC92` (`Present+0xB2`), RAX resolves to D2D `PresentDWM` and RDX to
-`dxgi!CDXGISwapChainDWMLegacy`. The E8 calls the original guard thunk at RVA
-`0x308010`; its loader-retargeted E9 is preserved. RVAs are diagnostic only:
-installation requires the supported OS/module build family, a unique
-function/call pattern (including RDX setup and vtable +68h), and a validated
-fothk dispatch chain. Minor revision, ImageSize, /Brepro stamp and CheckSum
-are not pinned; PE metadata is still logged for diagnosis. Missing file
-version or out-of-family builds fail closed. This is **not** general Win11
-support and is not gated on VMware driver names. Pattern compatibility does
-not prove every cumulative update renders correctly: actual overlay
-drawing/ghosting validation on the target machine is still required.
+The identified OS 26200 / dwmcore 10.0.26100.9278 image
+(SizeOfImage `0x443000`, stamp `0x9A1AF3BA`, checksum `0x004477E9`)
+uses one **rendering** hook. Inactive Legacy candidates are not installed
+on this image; the separate inlined Legacy compatibility profile remains
+available to other matching images. Temporary path-discovery probes are removed.
 
-The E8 relay saves the register context, routes RDX to the renderer, and
-returns to the original guard thunk; it does not replace the global CFG
-dispatcher. The first matched callback logs `Hook first hit: ... argument=...`
-independently of whether the renderer later obtains a back buffer.
+```text
+CDDisplaySwapChain::PresentMPO (RVA 140910)
+  -> hook its ExecutePresent call (RVA 1409F9)
+  -> R8 plane array / R9D count, select enabled base plane 0
+  -> CDDisplaySwapChainBuffer::GetD3D11Resource
+  -> QueryInterface(ID3D11Texture2D)
+  -> OverlayRenderer::RenderTexture (existing ImGui/IPC/Markdown)
+  -> original CDDisplaySwapChain::ExecutePresent (RVA 2BD2C4)
+```
 
-Isolated hook regression tests (no DWM injection):
+`Profiles/Win11DDisplayProfile.h` owns image/pattern selection.
+`Render/DDisplaySurfaceAdapter` owns the verified native ABI and resource
+extraction, not HookManager. Register snapshots are borrowed only for the
+synchronous callback. No native buffer is cast to `IDXGISwapChain`.
+
+Native ABI evidence from matching PDBs and instructions:
+`CDDisplaySwapChainBuffer` vtable RVA `300E48`, slot `+98h` ->
+`GetD3D11Resource` (`1F9E90`, borrowed resource).
+The scanout is queried for IID `AAC1AA85-B883-5C29-B7C1-C2EAAEB3DA75`;
+its `ddisplay.dll` vtable `43ED8`, slot `+30h` ->
+`SetPlaneDirtyRects` (`293A0`). Rectangles use X/Y/Width/Height.
+Before drawing, replace dirty rectangles with the full frame (a superset of
+DWM's original updates); do not replace them with only the UI rectangle.
+The adapter additionally validates ddisplay image size `60000` / stamp
+`A9FD047A`, actual object vtables and getter entry bytes. Unknown layouts
+fail closed; do not widen version gates without re-verifying the native ABI.
+
+The adapter selects only the primary monitor, including multi-monitor setups:
+the swap-chain interface (`this +18h`, vtable `3084A0`) provides display
+adapter LUID / VidPn target ID (verified getters `1F1080` / `2BDBA0`).
+These identities map to active display paths and the primary GDI monitor via
+[QueryDisplayConfig](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-querydisplayconfig).
+Topology is cached for two seconds, not enumerated on every present; concurrent
+refresh callers skip rather than wait. Equal monitor resolutions are not
+treated as equal display identities. The UI is drawn on the primary only.
+Unknown mappings, rotated/scaled planes, stereo/MSAA/protected surfaces are
+skipped with a one-time reason. Supported formats: BGRA8/RGBA8/RGB10A2/RGBA16F.
+Hot-plug/primary-monitor switching and hardware-MPO promotion still need
+target-machine validation; this is not arbitrary multi-monitor UI placement.
+The existing GPU backdrop comparison/restore and asynchronous desktop
+invalidation are reused. DDisplay keeps separate backdrop state per rotating
+texture (bounded to four), resets it on chain/size/format changes, and skips
+drawing if preservation fails. GPU writes are flushed before the original
+ExecutePresent. Full-frame dirty rectangles prioritize correctness over
+partial-present bandwidth optimization.
+
+Rebuild the DLL, **unload the old instance**, then inject the new one.
+Expected milestones: `Win11 DDisplay rendering path selected`,
+`Runtime ready with 1 hook(s)`, `Hook first hit`,
+`DDisplay texture adapter ready`, `DDisplay base-plane D3D11 texture acquired`,
+`Present source active`, `ImGui initialized`.
+Shutdown reports the hit count and releases the renderer's texture/backdrop
+references after restoring hooks and draining callbacks.
+Target-machine rendering/ghosting/hide-show/unload validation is still required.
+
+Isolated checks (synthetic fixtures/WARP only; no DWM injection):
 
 ```powershell
 cmake -S tests -B ../analyze_result/win11_legacy_hook_tests_build -G "Visual Studio 16 2019" -A x64
@@ -143,17 +186,13 @@ cmake --build ../analyze_result/win11_legacy_hook_tests_build --config Release
 ctest --test-dir ../analyze_result/win11_legacy_hook_tests_build -C Release --output-on-failure
 ```
 
-The CFG-enabled tests map a **synthetic fixture DLL** made from the supplied
-KD instruction bytes, not a system dwmcore DLL. They accept varied minor
-revisions/PE metadata when patterns match, but reject unsupported OS/module
-families, ambiguous functions, wrong call contracts and malformed thunks;
-install exactly one Legacy/RDX hook; check RX relay protection, all nine
-register/stack arguments, original dispatcher forwarding and return value;
-then verify byte-exact restore. They do not prove target-machine rendering.
-
-The profile table also targets the 18362/18363 and 19041-19045 build families,
-but every cumulative-update variant should be regression-tested before being
-declared verified.
+Tests cover Legacy regression; the DDisplay render callback and register
+contract; exclusive hook selection, image/callee validation, nine-argument
+forwarding and exact restore; bounded native plane reads, WARP texture QI
+ownership and dirty-rect ABI; same-resolution monitor identity selection;
+four-format GPU backdrop restore/readback and pipeline-state restoration.
+Shared renderer/router sources are also compiled
+without building the production DLL. Win10 profiles remain unchanged.
 
 ## Lifecycle
 

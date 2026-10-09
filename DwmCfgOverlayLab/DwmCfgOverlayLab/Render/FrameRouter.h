@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Hooks/HookTypes.h"
+#include "DDisplaySurfaceAdapter.h"
 
 namespace dwm_overlay {
 
@@ -14,6 +15,7 @@ public:
 
 private:
 	OverlayRenderer& renderer_;
+	DDisplaySurfaceAdapter displayAdapter_;
 };
 
 } // namespace dwm_overlay

@@ -10,6 +10,34 @@ static HookManager* volatile g_activeHookManager = nullptr;
 
 HookManager::HookManager() noexcept = default;
 
+bool ValidateLocalCallTarget(
+	HMODULE module, UINT64 target, const BytePattern& pattern) noexcept {
+	if (!pattern.bytes || !pattern.mask)
+		return false;
+	const SIZE_T length = std::strlen(pattern.mask);
+	ModuleCodeView code = {};
+	if (!length || length > 64 || !TryGetModuleCodeView(module, code))
+		return false;
+	const UINT64 start = reinterpret_cast<UINT64>(code.codeBase);
+	if (target < start || target - start > code.codeSize ||
+		length > code.codeSize - static_cast<SIZE_T>(target - start) ||
+		!IsExecutableAddress(reinterpret_cast<void*>(target)) ||
+		!IsReadableRange(reinterpret_cast<void*>(target), length))
+		return false;
+	SIZE_T fixedBytes = 0;
+	for (SIZE_T index = 0; index < length; ++index) {
+		if (pattern.mask[index] == 'x') {
+			++fixedBytes;
+			if (reinterpret_cast<const BYTE*>(target)[index] !=
+				static_cast<BYTE>(pattern.bytes[index]))
+				return false;
+		}
+		else if (pattern.mask[index] != '?')
+			return false;
+	}
+	return fixedBytes >= 5;
+}
+
 static bool IsOwnedExecutableAddress(
 	HMODULE module,
 	const void* address) noexcept {
@@ -306,6 +334,11 @@ bool HookManager::Install(
 	UINT64 callSite) noexcept {
 	if (!callSite)
 		return false;
+	if (specification.callSiteEncoding == CallSiteEncoding::RelativeCallToVerifiedLocal &&
+		specification.kind != PresentKind::DDisplayMultiplaneOverlay) {
+		DWM_LOG_FORMAT("%s: local direct-call contract requires the DDisplay adapter", specification.name);
+		return false;
+	}
 	AcquireSRWLockExclusive(&lock_);
 	if (FindById(specification.id)) {
 		ReleaseSRWLockExclusive(&lock_);
@@ -372,10 +405,15 @@ bool HookManager::Install(
 			static_cast<INT64>(callSite + instructionLength) +
 			originalDisplacement);
 		const HMODULE module = GetModuleHandleW(specification.moduleName);
-		if (!ValidateFothkCallTarget(module, originalCallTarget)) {
+		const bool validTarget = specification.callSiteEncoding ==
+			CallSiteEncoding::RelativeCallToVerifiedLocal
+			? ValidateLocalCallTarget(module, originalCallTarget,
+				specification.localTargetPattern)
+			: ValidateFothkCallTarget(module, originalCallTarget);
+		if (!validTarget) {
 			ReleaseSRWLockExclusive(&lock_);
 			DWM_LOG_FORMAT(
-				"%s: original fothk/XFG dispatch chain is invalid",
+				"%s: original call target/dispatch chain is invalid",
 				specification.name);
 			return false;
 		}
@@ -423,7 +461,7 @@ bool HookManager::Install(
 	instance.installed = true;
 	++hookCount_;
 	ReleaseSRWLockExclusive(&lock_);
-	DWM_LOG_FORMAT("Hook installed: %s at %p", specification.name,
+	DWM_LOG_FORMAT("Hook installed: %s at %p mode=render", specification.name,
 		reinterpret_cast<void*>(callSite));
 	return true;
 }
@@ -457,6 +495,12 @@ SIZE_T HookManager::InstalledCount() const noexcept {
 	return hookCount_;
 }
 
+UINT64 HookManager::HitCount(HookSiteId id) const noexcept {
+	const auto* hook = FindById(id);
+	return hook ? static_cast<UINT64>(InterlockedCompareExchange64(
+		const_cast<volatile LONG64*>(&hook->hitCount), 0, 0)) : 0;
+}
+
 UINT64 HookManager::ReadArgument(
 	ArgumentSource source,
 	const HookCpuContext& context) const noexcept {
@@ -480,7 +524,8 @@ void HookManager::Dispatch(const HookCpuContext& context) noexcept {
 					instance->specification,
 					context.returnAddress,
 					reinterpret_cast<void*>(ReadArgument(
-						instance->specification->argumentSource, context))
+						instance->specification->argumentSource, context)),
+					&context
 				};
 				if (hits == 1)
 					DWM_LOG_FORMAT("Hook first hit: %s argument=%p",
@@ -524,6 +569,11 @@ bool HookManager::UninstallAll(DWORD callbackDrainTimeoutMs) noexcept {
 
 	if (restoredAll) {
 		for (auto& hook : hooks_) {
+			if (hook.specification)
+				DWM_LOG_FORMAT("Hook statistics: %s hits=%llu",
+					hook.specification->name,
+					static_cast<unsigned long long>(
+						InterlockedCompareExchange64(&hook.hitCount, 0, 0)));
 			if (hook.relayAllocation)
 				VirtualFree(hook.relayAllocation, 0, MEM_RELEASE);
 			hook = {};

@@ -147,6 +147,7 @@
     <ClCompile Include="Bootstrap\InstanceCoordinator.cpp" />
     <ClCompile Include="Bootstrap\Runtime.cpp" />
     <ClCompile Include="Hooks\HookManager.cpp" />
+    <ClCompile Include="Render\DDisplaySurfaceAdapter.cpp" />
     <ClCompile Include="Input\InputSource.cpp" />
     <ClCompile Include="IPC\AnswerIpc.cpp" />
     <ClCompile Include="IPC\ControlIpc.cpp" />
@@ -167,6 +168,8 @@
     <ClInclude Include="Bootstrap\Runtime.h" />
     <ClInclude Include="Common\Log.h" />
     <ClInclude Include="Hooks\HookManager.h" />
+    <ClInclude Include="Render\DDisplaySurfaceAdapter.h" />
+    <ClInclude Include="Profiles\Win11DDisplayProfile.h" />
     <ClInclude Include="Hooks\HookTypes.h" />
     <ClInclude Include="Input\InputSource.h" />
     <ClInclude Include="IPC\AnswerIpc.h" />

@@ -16,14 +16,16 @@ enum class HookSiteId : UINT32 {
 	Win10LegacyD2DPresentMpo,
 	Win10VmwarePresentInternal,
 	Win11LegacyD2DPresent,
-	ExperimentalD2DPresent
+	Win11DDisplayPresentMpo
 };
 
 enum class CallSiteEncoding : UINT8 {
 	// call qword ptr [rip+disp32]
 	GuardDispatchRipIndirect,
 	// call rel32 into the module's fothk/XFG dispatch section
-	RelativeCallToFothk
+	RelativeCallToFothk,
+	// E8 to a uniquely matched .text callee; preserves its original destination.
+	RelativeCallToVerifiedLocal
 };
 
 enum class ArgumentSource : UINT8 {
@@ -37,7 +39,9 @@ enum class PresentKind : UINT8 {
 	DxgiPresent,
 	DxgiPresent1,
 	MultiplaneOverlay,
-	VmwarePresentInternal
+	VmwarePresentInternal,
+	// DDisplay plane buffers need their own verified resource adapter.
+	DDisplayMultiplaneOverlay
 };
 
 enum class EnvironmentRequirement : UINT8 {
@@ -81,7 +85,12 @@ struct HookSpec {
 	// file version is unavailable; patterns must still match uniquely.
 	DWORD requiredImageStamp = 0;
 	DWORD requiredImageChecksum = 0;
+	// Required for RelativeCallToVerifiedLocal; checked again before patching.
+	BytePattern localTargetPattern = {};
 };
+
+bool ValidateLocalCallTarget(
+	HMODULE module, UINT64 target, const BytePattern& pattern) noexcept;
 
 // This structure mirrors the register save area emitted by HookBridge.asm.
 // Keeping the assembly generic means that adding RCX/RDX/R8/R9 based paths
@@ -120,6 +129,8 @@ struct HookInvocation {
 	const HookSpec* specification;
 	UINT64 returnAddress;
 	void* argument;
+	// Borrowed register snapshot; valid only during the synchronous callback.
+	const HookCpuContext* cpuContext = nullptr;
 };
 
 using HookDispatchCallback = void(*)(const HookInvocation& invocation) noexcept;

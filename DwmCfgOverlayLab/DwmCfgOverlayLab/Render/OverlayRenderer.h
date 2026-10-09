@@ -7,6 +7,7 @@
 #include <wrl/client.h>
 
 #include <string>
+#include <array>
 #include <vector>
 
 #include "../Hooks/HookTypes.h"
@@ -15,6 +16,7 @@
 #include "../UI/OverlayUi.h"
 #include "BackdropCompositor.h"
 #include "InvalidationWorker.h"
+#include "DDisplaySurfaceAdapter.h"
 
 namespace dwm_overlay {
 
@@ -22,6 +24,8 @@ class OverlayRenderer final {
 public:
 	bool Initialize() noexcept;
 	void Render(void* presentationObject, const HookSpec& source) noexcept;
+	void RenderTexture(ID3D11Texture2D* texture, const HookSpec& source,
+		UINT64 chainIdentity, ddisplay::IDisplayScanoutDirty* scanout, UINT32 plane) noexcept;
 	void Shutdown() noexcept;
 	bool IsDestroyed() const noexcept;
 	// Hub-driven visibility (control IPC). Hide erases the last presented UI
@@ -59,6 +63,12 @@ private:
 		RECT& bounds) noexcept;
 	void ClearDeviceResources() noexcept;
 	void RenderFrame(void* presentationObject, const HookSpec& source) noexcept;
+	void RenderTextureFrame(ID3D11Texture2D* texture, const HookSpec& source,
+		IDXGISwapChain* swapChain, UINT64 chainIdentity,
+		ddisplay::IDisplayScanoutDirty* scanout, UINT32 plane) noexcept;
+	BackdropCompositor* SelectDisplayBackdrop(ID3D11Texture2D* texture,
+		const D3D11_TEXTURE2D_DESC& desc, UINT64 chainIdentity) noexcept;
+	void ClearDisplayBackdrops() noexcept;
 	void LogSourceOnce(const HookSpec& source) noexcept;
 
 	volatile LONG presentBusy_ = 0;
@@ -76,6 +86,14 @@ private:
 	bool hasCachedOverlayRect_ = false;
 	InvalidationWorker invalidationWorker_;
 	BackdropCompositor backdropCompositor_;
+	struct DisplayBackdropSlot {
+		Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+		BackdropCompositor compositor;
+	};
+	// Never compare one rotating scanout buffer against another buffer's UI.
+	std::array<DisplayBackdropSlot, 4> displayBackdrops_;
+	UINT64 displayChainIdentity_ = 0;
+	D3D11_TEXTURE2D_DESC displayDescription_ = {};
 	UiStateStore uiState_;
 	IAnswerProvider* answerProvider_ = nullptr;
 	ImFont* fontRegular_ = nullptr;

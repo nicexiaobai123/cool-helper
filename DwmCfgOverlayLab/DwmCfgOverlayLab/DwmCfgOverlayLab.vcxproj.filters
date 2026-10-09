@@ -44,6 +44,7 @@
     <ClCompile Include="Bootstrap\Runtime.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Bootstrap\InstanceCoordinator.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Hooks\HookManager.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\DDisplaySurfaceAdapter.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Input\InputSource.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="IPC\UiState.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="IPC\AnswerIpc.cpp"><Filter>Core</Filter></ClCompile>
@@ -92,6 +93,7 @@
     <ClInclude Include="Bootstrap\InstanceCoordinator.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Common\Log.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Hooks\HookManager.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\DDisplaySurfaceAdapter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Hooks\HookTypes.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Input\InputSource.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="IPC\UiState.h"><Filter>Core</Filter></ClInclude>
@@ -99,6 +101,7 @@
     <ClInclude Include="IPC\ControlIpc.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Platform\SystemProbe.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Profiles\DwmHookProfiles.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Profiles\Win11DDisplayProfile.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\FrameRouter.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\BackdropCompositor.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\InvalidationWorker.h"><Filter>Core</Filter></ClInclude>

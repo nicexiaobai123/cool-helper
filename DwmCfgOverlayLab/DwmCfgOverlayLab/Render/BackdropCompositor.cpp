@@ -5,10 +5,85 @@
 #include <d3dcompiler.h>
 
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace dwm_overlay {
 namespace {
+
+// ImGui backs up the state it sees, which would otherwise already contain
+// our backdrop shaders. Restore backdrop-pass changes before ImGui renders
+// so the native present caller keeps its own pipeline state.
+class BackdropStateGuard final {
+public:
+	explicit BackdropStateGuard(ID3D11DeviceContext* context) noexcept : context_(context) {
+		context_->IAGetInputLayout(&layout_);
+		context_->IAGetPrimitiveTopology(&topology_);
+		context_->VSGetShader(&vertex_, vertexInstances_, &vertexCount_);
+		context_->PSGetShader(&pixel_, pixelInstances_, &pixelCount_);
+		context_->GSGetShader(&geometry_, geometryInstances_, &geometryCount_);
+		context_->HSGetShader(&hull_, hullInstances_, &hullCount_);
+		context_->DSGetShader(&domain_, domainInstances_, &domainCount_);
+		context_->PSGetConstantBuffers(0, 1, &constants_);
+		context_->PSGetShaderResources(0, 3, resources_);
+		context_->RSGetState(&rasterizer_);
+		context_->RSGetViewports(&viewportCount_, viewports_);
+		context_->OMGetBlendState(&blend_, blendFactor_, &sampleMask_);
+		context_->OMGetDepthStencilState(&depth_, &stencilRef_);
+	}
+	~BackdropStateGuard() {
+		context_->IASetInputLayout(layout_.Get());
+		context_->IASetPrimitiveTopology(topology_);
+		context_->VSSetShader(vertex_.Get(), vertexInstances_, vertexCount_);
+		context_->PSSetShader(pixel_.Get(), pixelInstances_, pixelCount_);
+		context_->GSSetShader(geometry_.Get(), geometryInstances_, geometryCount_);
+		context_->HSSetShader(hull_.Get(), hullInstances_, hullCount_);
+		context_->DSSetShader(domain_.Get(), domainInstances_, domainCount_);
+		ID3D11Buffer* constants = constants_.Get();
+		context_->PSSetConstantBuffers(0, 1, &constants);
+		context_->PSSetShaderResources(0, 3, resources_);
+		context_->RSSetState(rasterizer_.Get());
+		context_->RSSetViewports(viewportCount_, viewports_);
+		context_->OMSetBlendState(blend_.Get(), blendFactor_, sampleMask_);
+		context_->OMSetDepthStencilState(depth_.Get(), stencilRef_);
+		for (auto* resource : resources_) if (resource) resource->Release();
+		for (UINT index = 0; index < vertexCount_; ++index)
+			if (vertexInstances_[index]) vertexInstances_[index]->Release();
+		for (UINT index = 0; index < pixelCount_; ++index)
+			if (pixelInstances_[index]) pixelInstances_[index]->Release();
+		for (UINT index = 0; index < geometryCount_; ++index)
+			if (geometryInstances_[index]) geometryInstances_[index]->Release();
+		for (UINT index = 0; index < hullCount_; ++index)
+			if (hullInstances_[index]) hullInstances_[index]->Release();
+		for (UINT index = 0; index < domainCount_; ++index)
+			if (domainInstances_[index]) domainInstances_[index]->Release();
+	}
+private:
+	ID3D11DeviceContext* context_;
+	Microsoft::WRL::ComPtr<ID3D11InputLayout> layout_;
+	Microsoft::WRL::ComPtr<ID3D11VertexShader> vertex_;
+	Microsoft::WRL::ComPtr<ID3D11PixelShader> pixel_;
+	Microsoft::WRL::ComPtr<ID3D11GeometryShader> geometry_;
+	Microsoft::WRL::ComPtr<ID3D11HullShader> hull_;
+	Microsoft::WRL::ComPtr<ID3D11DomainShader> domain_;
+	Microsoft::WRL::ComPtr<ID3D11Buffer> constants_;
+	Microsoft::WRL::ComPtr<ID3D11RasterizerState> rasterizer_;
+	Microsoft::WRL::ComPtr<ID3D11BlendState> blend_;
+	Microsoft::WRL::ComPtr<ID3D11DepthStencilState> depth_;
+	ID3D11ClassInstance* vertexInstances_[256] = {};
+	ID3D11ClassInstance* pixelInstances_[256] = {};
+	ID3D11ClassInstance* geometryInstances_[256] = {};
+	ID3D11ClassInstance* hullInstances_[256] = {};
+	ID3D11ClassInstance* domainInstances_[256] = {};
+	ID3D11ShaderResourceView* resources_[3] = {};
+	D3D11_PRIMITIVE_TOPOLOGY topology_ = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	D3D11_VIEWPORT viewports_[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+	UINT vertexCount_ = 256, pixelCount_ = 256;
+	UINT geometryCount_ = 256, hullCount_ = 256, domainCount_ = 256;
+	UINT viewportCount_ = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	FLOAT blendFactor_[4] = {};
+	UINT sampleMask_ = 0, stencilRef_ = 0;
+};
 
 // Covers the render-target viewport with one triangle; no vertex buffer is
 // bound, the position is generated from SV_VertexID.
@@ -70,8 +145,13 @@ bool CreateRegionTexture(
 	if (zeroInitialize) {
 		// pSysMem must contain the WHOLE texture; a row-sized buffer makes
 		// D3D read past the allocation.
-		const size_t pitch = static_cast<size_t>(description.Width) * 4;
-		zeroData.resize(pitch * description.Height, 0);
+		// Windows 11 HDR composition can use RGBA16F (8 bytes/pixel).
+		const size_t bytesPerPixel = description.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+		const size_t pitch = static_cast<size_t>(description.Width) * bytesPerPixel;
+		try {
+			zeroData.resize(pitch * description.Height, 0);
+		}
+		catch (const std::bad_alloc&) { return false; }
 		initial.pSysMem = zeroData.data();
 		initial.SysMemPitch = static_cast<UINT>(pitch);
 	}
@@ -264,6 +344,7 @@ bool BackdropCompositor::RestoreBackdrop(
 		return false;
 	memcpy(mapped.pData, &constants, sizeof(constants));
 	context->Unmap(constantBuffer_.Get(), 0);
+	BackdropStateGuard stateGuard(context);
 
 	const UINT backdropWrite = backdropRead_ ^ 1;
 	context->OMSetRenderTargets(1, backdropTargets_[backdropWrite].GetAddressOf(), nullptr);
@@ -282,6 +363,9 @@ bool BackdropCompositor::RestoreBackdrop(
 	context->IASetInputLayout(nullptr);
 	context->VSSetShader(vertexShader_.Get(), nullptr, 0);
 	context->PSSetShader(pixelShader_.Get(), nullptr, 0);
+	context->GSSetShader(nullptr, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
 	context->PSSetConstantBuffers(0, 1, constantBuffer_.GetAddressOf());
 	ID3D11ShaderResourceView* views[3] = {
 		regionView_.Get(), lastOutputView_.Get(), backdropViews_[backdropRead_].Get()

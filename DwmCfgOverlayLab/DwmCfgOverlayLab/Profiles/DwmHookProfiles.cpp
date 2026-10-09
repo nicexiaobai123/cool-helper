@@ -1,4 +1,5 @@
 #include "DwmHookProfiles.h"
+#include "Win11DDisplayProfile.h"
 #include "../Common/Log.h"
 #include "../Scanner/PatternScanner.h"
 
@@ -77,7 +78,7 @@ static const PatternVariant kLegacyVmwareVariants[] = {
 	}
 };
 
-// Verified in a live KD session: CLegacySwapChain::Present calls
+// Inlined layout verified in a live KD session: CLegacySwapChain::Present calls
 // d2d1!D2DDeviceContextBase<...>::PresentDWM through vtable +68h.
 // At this call RDX is dxgi!CDXGISwapChainDWMLegacy, not the wrapper's this.
 static const PatternVariant kWin11LegacyD2DPresentVariants[] = {
@@ -247,6 +248,22 @@ static UINT64 ResolveHookCallSite(const HookSpec& specification) noexcept {
 					continue;
 				}
 			}
+			else if (specification.callSiteEncoding ==
+				CallSiteEncoding::RelativeCallToVerifiedLocal) {
+				if (specification.kind != PresentKind::DDisplayMultiplaneOverlay ||
+					!IsReadableRange(reinterpret_cast<const void*>(callSite), 5) ||
+					*reinterpret_cast<const BYTE*>(callSite) != 0xE8)
+					continue;
+				INT32 displacement = 0;
+				std::memcpy(&displacement, reinterpret_cast<const void*>(callSite + 1), 4);
+				const UINT64 target = static_cast<UINT64>(
+					static_cast<INT64>(callSite + 5) + displacement);
+				if (!ValidateLocalCallTarget(module, target,
+					specification.localTargetPattern)) {
+					DWM_LOG_FORMAT("%s: local callee pattern is invalid", variant.variantName);
+					continue;
+				}
+			}
 			DWM_LOG_FORMAT(
 				"Resolved %s with variant %s (function RVA=0x%llX call RVA=0x%llX)",
 				specification.name, variant.variantName,
@@ -267,7 +284,7 @@ ProfileInstallResult InstallCompatibleHookProfiles(
 	const SystemFingerprint& fingerprint,
 	HookManager& hookManager) noexcept {
 	ProfileInstallResult result = {};
-	for (const auto& specification : kHookSpecifications) {
+	const auto install = [&](const HookSpec& specification) noexcept {
 		if (fingerprint.osBuild < specification.minimumBuild ||
 			fingerprint.osBuild > specification.maximumBuild ||
 			fingerprint.dwmcoreVersion.build < specification.minimumModuleBuild ||
@@ -283,20 +300,29 @@ ProfileInstallResult InstallCompatibleHookProfiles(
 			(specification.requiredImageChecksum &&
 				fingerprint.dwmcoreImageChecksum != specification.requiredImageChecksum) ||
 			!EnvironmentMatches(specification.environment, fingerprint))
-			continue;
+			return;
 		++result.applicableHooks;
 		if (hookManager.IsInstalled(specification.id)) {
 			++result.installedHooks;
-			continue;
+			return;
 		}
 
 		const UINT64 callSite = ResolveHookCallSite(specification);
 		if (!callSite)
-			continue;
+			return;
 		++result.resolvedHooks;
 		if (hookManager.Install(specification, callSite))
 			++result.installedHooks;
+	};
+	// This image uses DDisplay. Install its verified texture adapter, not the
+	// inactive Legacy path or exploratory Present candidates.
+	if (win11_ddisplay::MatchesImage(fingerprint)) {
+		DWM_LOG("Win11 DDisplay rendering path selected: CDDisplaySwapChain::PresentMPO");
+		install(win11_ddisplay::kSpecification);
+		return result;
 	}
+	for (const auto& specification : kHookSpecifications)
+		install(specification);
 	if (!result.applicableHooks)
 		DWM_LOG_FORMAT(
 			"No verified hook profile: OS=%lu dwmcore=%u.%u.%u.%u image=0x%lX stamp=0x%08lX checksum=0x%08lX",

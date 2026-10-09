@@ -13,6 +13,7 @@ public:
 		IDXGISwapChain* swapChain,
 		bool hasCurrentRect,
 		const RECT& currentSwapChainRect) noexcept;
+	void QueueScreenOverlay(bool hasCurrentRect, const RECT& currentScreenRect) noexcept;
 
 private:
 	static DWORD WINAPI ThreadEntry(void* parameter) noexcept;
@@ -30,7 +31,6 @@ private:
 	volatile LONG stopping_ = 0;
 	RECT pendingRect_ = {};
 	bool hasPendingRect_ = false;
-	IDXGISwapChain* lastSwapChain_ = nullptr;
 	RECT lastScreenRect_ = {};
 	bool hasLastScreenRect_ = false;
 };

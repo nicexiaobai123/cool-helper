@@ -18,6 +18,7 @@ public:
 	bool UninstallAll(DWORD callbackDrainTimeoutMs = 2000) noexcept;
 	void Dispatch(const HookCpuContext& context) noexcept;
 	SIZE_T InstalledCount() const noexcept;
+	UINT64 HitCount(HookSiteId id) const noexcept;
 
 	static void SetActiveManager(HookManager* manager) noexcept;
 	static HookManager* GetActiveManager() noexcept;

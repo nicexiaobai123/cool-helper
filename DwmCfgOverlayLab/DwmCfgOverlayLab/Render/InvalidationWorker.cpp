@@ -127,7 +127,12 @@ void InvalidationWorker::QueueMovedOverlay(
 	if (hasCurrentRect) {
 		currentScreenRect = ToScreen(swapChain, currentSwapChainRect);
 	}
-	else if (!hasLastScreenRect_) {
+	QueueScreenOverlay(hasCurrentRect, currentScreenRect);
+}
+
+void InvalidationWorker::QueueScreenOverlay(
+	bool hasCurrentRect, const RECT& currentScreenRect) noexcept {
+	if (!hasCurrentRect && !hasLastScreenRect_) {
 		return; // Nothing was drawn before; no region to recompose.
 	}
 
@@ -152,7 +157,6 @@ void InvalidationWorker::QueueMovedOverlay(
 		}
 	}
 
-	lastSwapChain_ = swapChain;
 	lastScreenRect_ = currentScreenRect;
 	hasLastScreenRect_ = hasCurrentRect;
 	if (!hasDirtyRect || !event_)

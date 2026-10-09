@@ -424,6 +424,52 @@ void OverlayRenderer::Render(
 	}
 }
 
+void OverlayRenderer::RenderTexture(ID3D11Texture2D* texture, const HookSpec& source,
+	UINT64 chainIdentity, ddisplay::IDisplayScanoutDirty* scanout, UINT32 plane) noexcept {
+	if (!texture || !scanout || IsDestroyed() ||
+		InterlockedCompareExchange(&overlayVisible_, 0, 0) == 0 ||
+		InterlockedCompareExchange(&presentBusy_, 1, 0) != 0)
+		return;
+	__try {
+		RenderTextureFrame(texture, source, nullptr, chainIdentity, scanout, plane);
+	}
+	__finally {
+		InterlockedExchange(&presentBusy_, 0);
+	}
+}
+
+void OverlayRenderer::ClearDisplayBackdrops() noexcept {
+	for (auto& slot : displayBackdrops_) {
+		slot.compositor.Shutdown();
+		slot.texture.Reset();
+	}
+	displayChainIdentity_ = 0;
+	displayDescription_ = {};
+}
+
+BackdropCompositor* OverlayRenderer::SelectDisplayBackdrop(ID3D11Texture2D* texture,
+	const D3D11_TEXTURE2D_DESC& desc, UINT64 chainIdentity) noexcept {
+	if (displayChainIdentity_ != chainIdentity || displayDescription_.Width != desc.Width ||
+		displayDescription_.Height != desc.Height || displayDescription_.Format != desc.Format) {
+		ClearDisplayBackdrops();
+		displayChainIdentity_ = chainIdentity;
+		displayDescription_ = desc;
+	}
+	for (auto& slot : displayBackdrops_)
+		if (slot.texture.Get() == texture)
+			return &slot.compositor;
+	for (auto& slot : displayBackdrops_) {
+		if (!slot.texture) {
+			slot.texture = texture;
+			return &slot.compositor;
+		}
+	}
+	// Retaining four rotating buffers is bounded. Do not evict a dirty buffer
+	// and lose its clean background; a chain/resize change resets this cache.
+	DWM_LOG_ONCE("DDisplay rotating-buffer cache exhausted; additional texture skipped");
+	return nullptr;
+}
+
 void OverlayRenderer::RenderFrame(
 	void* presentationObject,
 	const HookSpec& source) noexcept {
@@ -438,16 +484,31 @@ void OverlayRenderer::RenderFrame(
 		return;
 	}
 
+	RenderTextureFrame(backBuffer.Get(), source, swapChain, 0, nullptr, 0);
+}
+
+void OverlayRenderer::RenderTextureFrame(ID3D11Texture2D* backBuffer, const HookSpec& source,
+	IDXGISwapChain* swapChain, UINT64 chainIdentity,
+	ddisplay::IDisplayScanoutDirty* scanout, UINT32 plane) noexcept {
+	LogSourceOnce(source);
+	D3D11_TEXTURE2D_DESC backBufferDescription = {};
+	backBuffer->GetDesc(&backBufferDescription);
 	ComPtr<ID3D11Device> frameDevice;
 	backBuffer->GetDevice(&frameDevice);
 	if (!frameDevice || !EnsureDevice(frameDevice.Get())) {
 		DWM_LOG_ONCE("Back buffer device is unavailable");
 		return;
 	}
+	// Initialize/validate the device before selecting per-device backdrop state.
+	BackdropCompositor* compositor = &backdropCompositor_;
+	if (scanout) {
+		compositor = SelectDisplayBackdrop(backBuffer, backBufferDescription, chainIdentity);
+		if (!compositor) return;
+	}
 
 	ComPtr<ID3D11RenderTargetView> frameRenderTarget;
 	if (FAILED(device_->CreateRenderTargetView(
-		backBuffer.Get(), nullptr, &frameRenderTarget))) {
+		backBuffer, nullptr, &frameRenderTarget))) {
 		DWM_LOG_ONCE("CreateRenderTargetView failed");
 		return;
 	}
@@ -487,6 +548,11 @@ void OverlayRenderer::RenderFrame(
 	}
 
 	const bool drawOverlay = hasCachedOverlayRect_;
+	if (scanout && drawOverlay && FAILED(ddisplay::SetFullPlaneDirtyRects(
+		scanout, plane, backBufferDescription.Width, backBufferDescription.Height))) {
+		DWM_LOG_ONCE("DDisplay full-plane dirty-rect update failed; drawing skipped");
+		return;
+	}
 	{
 		// The translucent UI must blend over the freshest composition. DWM's
 		// partial recomposition of the (per-frame invalidated) region is not
@@ -499,14 +565,18 @@ void OverlayRenderer::RenderFrame(
 		D3D11OutputStateGuard stateGuard(context_.Get());
 		bool restored = false;
 		if (drawOverlay) {
-			restored = backdropCompositor_.EnsureSize(
+			restored = compositor->EnsureSize(
 				device_.Get(), backBufferDescription);
 			if (restored)
-				backdropCompositor_.CaptureRegion(
-					context_.Get(), backBuffer.Get(), cachedOverlayRect_);
+				compositor->CaptureRegion(
+					context_.Get(), backBuffer, cachedOverlayRect_);
 			if (restored)
-				restored = backdropCompositor_.RestoreBackdrop(
-					context_.Get(), backBuffer.Get(), cachedOverlayRect_);
+				restored = compositor->RestoreBackdrop(
+					context_.Get(), backBuffer, cachedOverlayRect_);
+			if (!restored && scanout) {
+				DWM_LOG_ONCE("DDisplay background preservation unavailable; drawing skipped");
+				return; // Never alpha-accumulate onto a rotating native surface.
+			}
 			if (!restored)
 				DWM_LOG_ONCE(
 					"Backdrop compositor unavailable; drawing without restore");
@@ -515,11 +585,17 @@ void OverlayRenderer::RenderFrame(
 			context_->OMSetRenderTargets(1, &target, nullptr);
 			ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 			if (restored)
-				backdropCompositor_.SaveOutput(
-					context_.Get(), backBuffer.Get(), cachedOverlayRect_);
+				compositor->SaveOutput(
+					context_.Get(), backBuffer, cachedOverlayRect_);
 		}
-		invalidationWorker_.QueueMovedOverlay(swapChain,
-			drawOverlay && hasCachedOverlayRect_, cachedOverlayRect_);
+		if (scanout) {
+			// Native adapter accepts only the unscaled primary desktop plane.
+			invalidationWorker_.QueueScreenOverlay(drawOverlay, cachedOverlayRect_);
+			context_->Flush(); // Submit our writes before ExecutePresent signals/submits.
+		}
+		else
+			invalidationWorker_.QueueMovedOverlay(swapChain,
+				drawOverlay && hasCachedOverlayRect_, cachedOverlayRect_);
 	}
 }
 
@@ -530,6 +606,7 @@ void OverlayRenderer::ClearDeviceResources() noexcept {
 		ImGui::DestroyContext();
 	}
 	backdropCompositor_.Shutdown();
+	ClearDisplayBackdrops();
 	hasCachedOverlayRect_ = false;
 	context_.Reset();
 	device_.Reset();
@@ -544,6 +621,7 @@ void OverlayRenderer::Shutdown() noexcept {
 	while (InterlockedCompareExchange(&presentBusy_, 0, 0) != 0 &&
 		GetTickCount64() < deadline)
 		Sleep(1);
+	invalidationWorker_.QueueScreenOverlay(false, RECT{});
 	ClearDeviceResources();
 	invalidationWorker_.Stop();
 	DWM_LOG("ImGui overlay destroyed");
