@@ -1,14 +1,14 @@
-# Third-party notices
+# 第三方组件声明
 
 ## Dear ImGui
 
-- Version: 1.91.2
-- Source: https://github.com/ocornut/imgui
-- License: MIT, see `third_party/imgui/LICENSE.txt`
+- 版本：1.91.2
+- 来源：[Dear ImGui 官方仓库](https://github.com/ocornut/imgui)
+- 许可证：MIT，原文见 `third_party/imgui/LICENSE.txt`。
 
 ## JSON for Modern C++
 
-- Version: 3.11.3
-- Source: https://github.com/nlohmann/json
-- License: MIT, see `third_party/nlohmann/LICENSE.MIT`
+- 版本：3.11.3
+- 来源：[nlohmann/json 官方仓库](https://github.com/nlohmann/json)
+- 许可证：MIT，原文见 `third_party/nlohmann/LICENSE.MIT`。
 

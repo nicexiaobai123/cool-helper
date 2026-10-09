@@ -1,225 +1,175 @@
 # DwmCfgOverlayLab
 
-An experimental x64 DLL that renders a handleless Dear ImGui layer into a
-verified DWM D3D11 presentation path.
+实验性 x64 DLL，在已验证的 DWM D3D11 上屏路径中绘制无窗口 Dear ImGui 覆盖层。
 
-Reference: https://bbs.kanxue.com/thread-283488.htm
+参考：[看雪原帖](https://bbs.kanxue.com/thread-283488.htm)。
 
-## Build
+## 构建
 
 ```powershell
-.\build.ps1                 # Release|x64 via VS2019 (v142), falls back to VS2022
+.\build.ps1                 # 默认 Release x64，优先 VS2019（v142），其次 VS2022
 .\build.ps1 -Configuration Debug
 ```
 
-After a successful x64 build the script copies `DwmCfgOverlayLab.dll` (and its
-PDB) into the matching `CoolHelperHub\build\<Configuration>` directory so the
-hub can inject it directly; a missing hub build directory is reported and
-skipped, not an error.
+构建成功后，脚本将 DLL 和 PDB 复制到对应的
+`CoolHelperHub\build\<Configuration>` 目录，方便中台加载。
+中台构建目录不存在时会提示并跳过复制，不视为构建失败。
 
-## Architecture
+## 整体架构
 
-The runtime is deliberately split so Windows compatibility work does not
-change rendering or UI code:
+系统适配、Hook、纹理获取、显示策略和 UI 分层，避免扩展 Windows 版本时重复修改渲染逻辑。
 
 ```text
 Bootstrap/Runtime
-  -> Bootstrap/InstanceCoordinator
-  -> Platform/SystemProbe
-  -> Profiles/DwmHookProfiles
-  -> Scanner/PatternScanner
-  -> Hooks/HookManager -> AsmHook.asm
-  -> Render/FrameRouter -> DxgiSurfaceAdapter / DDisplaySurfaceAdapter
-                       -> FrameTarget -> OverlayRenderer (display policy)
-                                      -> RenderSession (per display/device)
-  -> UI/OverlayUi <-> IPC/UiState
-  -> IPC/AnswerIpc (CoolHelperHub answer stream)
+  → Bootstrap/InstanceCoordinator（同一 DWM 进程的实例协调）
+  → Platform/SystemProbe（系统与模块信息）
+  → Profiles/DwmHookProfiles（版本、环境、特征码及参数约定）
+  → Scanner/PatternScanner（扫描与调用点校验）
+  → Hooks/HookManager → AsmHook.asm（安装、转发与恢复）
+  → Render/FrameRouter
+      → DxgiSurfaceAdapter / DDisplaySurfaceAdapter
+      → FrameTarget → OverlayRenderer（公共显示策略）
+                    → RenderSession（每个显示器/设备的渲染状态）
+  → UI/OverlayUi ↔ IPC/UiState
+  → IPC/AnswerIpc（答案流）/ IPC/ControlIpc（控制指令）
 ```
 
-- `Profiles` owns build ranges, environment predicates, byte-pattern variants,
-  argument registers, and presentation kinds.
-- `InstanceCoordinator` elects one owner per DWM process. A later DLL image is
-  control-only and forwards `ShutdownDwmOverlay` to the owner instead of
-  installing a second hook chain.
-- `HookManager` owns CFG/fothk call-site patches, nearby dispatch cells or
-  executable relays, hit routing, and explicit unhook state.
-- `AsmHook.asm` captures a generic register context. The Win10 bridge
-  tail-jumps to the virtual target; the Win11 bridge returns through a nearby
-  relay and the original fothk/XFG dispatcher.
-- `FrameRouter` selects a surface adapter. Adapters normalize textures,
-  display identity and optional pre/post-draw operations into `FrameTarget`;
-  only the DDisplay adapter knows its private ABI. Borrowed callback arguments
-  and native objects never escape the synchronous presentation callback.
-- `DisplayTopology` resolves display identities; `OverlayRenderer` applies the
-  common display policy and manages bounded sessions. `RenderSession` owns
-  D3D11, ImGui, fonts and backdrop state for one display/device. `OverlayUi`
-  has no knowledge of hooks, Windows versions or transport.
-- `UiStateStore` and `OverlayCommandQueue` are bounded/non-blocking on the
-  Present side, ready for a dedicated IPC worker.
-- `AnswerIpcService` runs on its own worker thread and consumes a lock-free
-  SPSC ring buffer in the named section `Local\CoolHelper.Overlay.Answer.v1`
-  written by CoolHelperHub's `OverlayIpcSink`. Both sides heartbeat the
-  shared header, so the service reattaches automatically when the hub
-  restarts. The transport contract constants are duplicated in
-  `IPC/AnswerIpc.h` and CoolHelperHub's `include/coolhelper/OverlayIpc.h` and
-  must stay byte-identical. The worker only starts once the runtime is a
-  verified owner (hooks installed); the Present thread only takes an SRWLock
-  to copy the current markdown text, which `OverlayUi` renders independently
-  on each selected display with a dark translucent style and a markdown subset
-  (headings with accent underlines, bold, inline code, fenced code blocks,
-  bullets and ordered lists with nesting, blockquotes, pipe tables, links,
-  horizontal rules) plus streaming auto-scroll.
-- Presentation model for the translucent overlay: no aged background
-  snapshots. `BackdropCompositor` decides on the GPU whether DWM recomposed
-  the overlay region since the previous present, by comparing the region
-  against the previous final output: pixels equal to that output were not
-  recomposed and keep the saved backdrop, pixels that differ adopt the
-  freshly composed content as the new backdrop. The chosen backdrop is
-  copied onto the back buffer with a plain CopySubresourceRegion and the UI
-  is alpha-blended on top by ImGui; every presented frame also queues the
-  region for recomposition. This stays stable whether or not DWM's partial
-  recomposition lands on a given frame (desktop/wallpaper repaints are
-  irregular), windows passing over the overlay leave no ghosting, and the
-  glass shows the live desktop.
-- Control channel (shared `../Shared/OverlayControlProtocol.h`): a small hub-to-DLL ring buffer
-  (`Local\CoolHelper.Overlay.Control.v1`) carrying low-frequency commands,
-  carrying visibility and scrolling commands. The DLL
-  reports its actual visibility and heartbeats back through the shared
-  header, so the hub toggles against the real state and a hub restart
-  cannot desync it. The hub registers the global Ctrl+Alt+H hotkey and
-  sends the toggle; new command types extend the same ring. Reserved header
-  fields now carry durable desired display mode and a capability/acknowledgment
-  word without changing the v1 size or existing commands. A reconnect reapplies
-  the selected mode; an old DLL is reported as not supporting display selection.
+- `Profiles`：维护系统版本范围、环境判断、特征码变体、参数寄存器和上屏类型。
+- `InstanceCoordinator`：同一 DWM 进程只允许一个实例安装 Hook；后加载的实例
+  只转发 `ShutdownDwmOverlay`，不重复安装。
+- `HookManager`：管理 CFG/fothk 调用点补丁、邻近分派单元、可执行跳板、命中路由和卸载状态。
+- `AsmHook.asm`：保存通用寄存器上下文；Win10 跳转到原虚函数目标，Win11
+  经邻近跳板及原有 fothk/XFG 分派路径返回。
+- `FrameRouter` 与适配器：把纹理、显示器身份和可选的绘制前后操作归一化为
+  `FrameTarget`。DDisplay 的私有 ABI 仅保留在适配器中，借用的参数和原生对象不逃逸出同步回调。
+- `DisplayTopology`：解析显示器身份；`OverlayRenderer`：应用公共显示策略，管理数量受限的会话。
+- `RenderSession`：独立持有 D3D11、ImGui、字体、布局和背景状态；`OverlayUi`
+  不依赖 Windows 版本、Hook 或 IPC 传输方式。
+- `UiStateStore` 和 `OverlayCommandQueue`：提供容量受限的状态/命令存储，减少 Present 路径的等待。
 
-### Common display policy and state
+### 答案与控制通信
 
-The hub offers Compatible, PrimaryOnly and AllDisplays. Bootstrap supplies
-the compatibility default (Win10 unrestricted; Win11 primary-only), rather
-than embedding this decision in an adapter. Explicit primary/all modes require
-a known monitor and an unrotated, correctly sized target. An unmapped legacy
-Win10 swap chain may render only under Compatible mode, preserving its previous
-behavior; it is never assigned to a monitor based on resolution alone.
+`AnswerIpcService` 在独立工作线程读取中台 `OverlayIpcSink` 写入的无锁 SPSC
+环形队列，命名共享内存为 `Local\CoolHelper.Overlay.Answer.v1`。双方维护心跳，
+中台重启后自动重连。答案协议分别定义在 `IPC/AnswerIpc.h` 和中台
+`include/coolhelper/OverlayIpc.h`，修改时必须保持字节布局一致。
 
-Up to eight display/device sessions maintain independent ImGui contexts, DPI
-fonts, UI layout and background copies. Each has up to eight chain/resource
-backdrops. Verified DXGI flip buffers also carry a generation anchor so
-same-size ResizeBuffers retires stale copies. No original GetBuffer texture
-reference is retained between callbacks. Unknown native generations are not
-guessed: if their bounded cache fills, that target stops drawing safely.
+只有成功安装 Hook 的主实例才启动通信工作线程。Present 线程通过 SRWLock
+复制答案快照，在各目标显示器上展示相同内容。UI 使用深色半透明样式，支持标题、
+粗体、行内代码、连续代码块、嵌套列表、引用、表格、链接和分隔线等 Markdown 子集，
+并支持流式自动滚动。
 
-Answers remain shared; each session consumes the same accumulated scroll
-commands independently. Mouse coordinates and invalidation rectangles use the
-monitor's desktop origin, including negative coordinates. Hide, policy changes
-and shutdown erase tracked regions across all outputs. This separation allows
-new presentation adapters without duplicating fonts, UI or display policy.
+控制通道为 `Local\CoolHelper.Overlay.Control.v1`，传递隐藏/显示、答案滚动等低频指令。
+协议统一定义在 `../Shared/OverlayControlProtocol.h`。DLL 回报实际显示状态和心跳，
+中台依据实际状态切换覆盖层。v1 保留字段用于存储显示目标配置及能力/同步回报，
+不改变原有大小和命令布局；重连会重新应用设置，旧 DLL 会显示“不支持显示策略”。
 
-Hiding does not immediately bypass Present: each previously painted rotating
-buffer gets a compare-and-restore pass without drawing UI, then hidden routing
-idles once no output needs cleanup. Fresh DWM pixels are preserved; native dirty
-preparation/flush still run on the Present thread, not the IPC worker. A hide
-racing an active draw cleans that same buffer before returning to Present.
-The invalidation worker requests background erase for hide/excluded targets,
-including desktop children; normal frame invalidation does not suppress an
-already pending erase. No blocking cross-process repaint is used.
+### 显示策略与多屏状态
 
-## Adding a Windows build or presentation path
+中台提供“兼容默认 / 仅主屏 / 所有屏幕”，对应 `Compatible / PrimaryOnly / AllDisplays`。
+`Bootstrap` 设置兼容默认值：Win10 不限制屏幕，Win11 仅主屏；适配器不负责决定画在哪块屏幕。
 
-1. Add one or more `PatternVariant` values in
-   `Profiles/DwmHookProfiles.cpp`.
-2. Add a `HookSpec` with a narrow build range and the verified argument source.
-   Match the supported OS/module build families; cumulative-update revisions
-   can share a profile only while its semantic function/call patterns match.
-3. If the hook argument is not swap-chain compatible, add a surface adapter
-   producing `FrameTarget` and register it in `Render/FrameRouter.cpp`. Resolve
-   real output identity and keep private ABI/preparation callbacks in the adapter;
-   do not add Windows-specific selection or UI code to the shared renderer.
-4. Test that the function pattern is unique and that the selected instruction
-   is either the intended `FF 15 disp32` CFG dispatch call, an `E8 rel32`
-   into `fothk`, or an explicitly verified local callee with its own adapter.
-5. Record the tested OS build, `dwmcore.dll` file version, physical/virtual GPU,
-   and runtime hit count.
+显式选择主屏或所有屏幕时，要求显示器身份已确认、目标未旋转且尺寸匹配。
+身份未知的 Win10 旧式交换链仅允许在“兼容默认”下保留原有绘制行为，不按分辨率猜测归属。
 
-Unsupported builds fail closed. Do not add a broad "first FF 15" fallback to a
-new version without verifying the argument contract in a debugger.
+最多维护 8 个显示器/设备会话，每个会话独立持有 ImGui 上下文、DPI 字体、布局和背景副本，
+最多缓存 8 组交换链/资源背景。已确认的 DXGI 翻转缓冲区使用代际标识，
+即使同尺寸调用 `ResizeBuffers` 也会淘汰旧副本。回调之间不保留原始 `GetBuffer` 纹理引用。
+无法确认原生资源代际时不做猜测；缓存达到上限后安全跳过绘制。
 
-## Currently verified
+每个会话独立消费相同的累计滚动指令。鼠标和重绘区域按显示器桌面原点换算，支持负坐标。
+隐藏、切换策略和关闭运行时会清理各显示器上已绘制的区域。
 
-- Windows 10 1909 / build 18363, VMware 3D (`vm3dum64*.dll`), with
-  `dwmcore.dll 10.0.18362.752`.
-- Windows 10 22H2 / build 19045 on physical hardware.
+### 背景恢复与隐藏清理
 
-Windows 11 retains the debugger-verified inlined Legacy profile:
-OS `26100-26200`, dwmcore file build `26100`, unique function/call patterns,
-RDX = `dxgi!CDXGISwapChainDWMLegacy`, original fothk dispatch preserved.
-This is not general Win11 rendering support. Unhit split-Legacy and other
-exploratory Present profiles/probes have been removed.
+`BackdropCompositor` 在 GPU 上比较当前像素与上次覆盖层最终输出：仍相同的像素保留
+干净背景，已变化的像素采用 DWM 新合成内容。恢复背景后，再由 ImGui 进行透明混合，
+并异步请求桌面重新合成，避免直接使用过期截图造成残留或重影。
 
-### Win11 DDisplay rendering
+隐藏后不立即跳过 Present：每个曾绘制覆盖层的轮换缓冲区执行比较与背景恢复，不再画 UI，
+清理完成后停止处理隐藏帧。新合成的桌面像素不会被旧背景覆盖。若隐藏与绘制同时发生，
+会在当前缓冲区返回 Present 前执行清理。
 
-The identified OS 26200 / dwmcore 10.0.26100.9278 image
-(SizeOfImage `0x443000`, stamp `0x9A1AF3BA`, checksum `0x004477E9`)
-uses one **rendering** hook. Inactive Legacy candidates are not installed
-on this image; the separate inlined Legacy compatibility profile remains
-available to other matching images. Temporary path-discovery probes are removed.
+原生脏区域准备和 GPU 刷新仍在 Present 线程执行，不从 IPC 工作线程访问 D3D11。
+重绘工作线程为隐藏/被排除的目标请求背景擦除，包括桌面子窗口；正常帧的重绘不取消
+已有的擦除请求，也不使用可能阻塞其他进程的同步重绘。
+
+## 扩展系统版本或上屏路径
+
+1. 在 `Profiles/DwmHookProfiles.cpp` 增加 `PatternVariant`。
+2. 增加 `HookSpec`，明确系统/模块版本范围、环境条件和已验证的参数来源。
+   累积更新小版本仅在函数和调用点语义匹配时共用配置。
+3. 参数不是兼容 DXGI 的交换链时，增加输出 `FrameTarget` 的适配器，并在
+   `Render/FrameRouter.cpp` 注册。私有 ABI、纹理提取和绘制前后操作留在适配器中，
+   不向公共渲染层增加版本专用 UI 或显示策略。
+4. 验证特征码唯一，选中的指令确为预期的 `FF 15 disp32` CFG 调用、
+   进入 `fothk` 的 `E8 rel32`，或拥有专用适配器的已确认本地调用。
+5. 记录系统版本、`dwmcore.dll` 文件版本、物理/虚拟 GPU 和运行时命中次数。
+
+不支持的版本拒绝安装。未确认参数约定前，不要使用“找到第一个 `FF 15` 就安装”等宽泛回退。
+
+## 系统兼容情况
+
+- Windows 10 1909 / 18363：VMware 3D（`vm3dum64*.dll`），已验证
+  `dwmcore.dll 10.0.18362.752`。
+- Windows 10 22H2 / 19045：已验证物理机。
+- Windows 11：保留调试器确认过的内联 Legacy 配置，范围为系统 `26100–26200`、
+  dwmcore 文件构建号 `26100`，要求函数/调用点特征码唯一，RDX 指向
+  `dxgi!CDXGISwapChainDWMLegacy`，保留原有 fothk 分派。此项不代表支持所有 Win11。
+  未命中的拆分 Legacy 候选及临时探针已移除。
+
+### Win11 DDisplay 上屏路径
+
+已确认系统 26200、`dwmcore.dll 10.0.26100.9278`：
+`SizeOfImage=0x443000`、Stamp=`0x9A1AF3BA`、CheckSum=`0x004477E9`。
+该映像只安装一个 DDisplay 绘制 Hook，不安装未执行的 Legacy 候选。
+其他匹配映像仍可使用独立的内联 Legacy 配置，临时路径探测代码已删除。
 
 ```text
-CDDisplaySwapChain::PresentMPO (RVA 140910)
-  -> hook its ExecutePresent call (RVA 1409F9)
-  -> R8 plane array / R9D count, select enabled base plane 0
-  -> CDDisplaySwapChainBuffer::GetD3D11Resource
-  -> QueryInterface(ID3D11Texture2D)
-  -> FrameTarget -> common display policy -> per-display RenderSession
-  -> original CDDisplaySwapChain::ExecutePresent (RVA 2BD2C4)
+CDDisplaySwapChain::PresentMPO（RVA 140910）
+  → Hook ExecutePresent 调用点（RVA 1409F9）
+  → 从 R8 平面数组 / R9D 数量中选择启用的基础平面 0
+  → CDDisplaySwapChainBuffer::GetD3D11Resource
+  → QueryInterface(ID3D11Texture2D)
+  → FrameTarget → 公共显示策略 → 每屏 RenderSession
+  → 原始 CDDisplaySwapChain::ExecutePresent（RVA 2BD2C4）
 ```
 
-`Profiles/Win11DDisplayProfile.h` owns image/pattern selection.
-`Render/DDisplaySurfaceAdapter` owns the verified native ABI and resource
-extraction, not HookManager. Register snapshots are borrowed only for the
-synchronous callback. No native buffer is cast to `IDXGISwapChain`.
+`Profiles/Win11DDisplayProfile.h` 负责映像与特征码选择；
+`Render/DDisplaySurfaceAdapter` 负责已验证的私有 ABI 和资源提取，
+不把原生缓冲区强制转换为 `IDXGISwapChain`。
 
-Native ABI evidence from matching PDBs and instructions:
-`CDDisplaySwapChainBuffer` vtable RVA `300E48`, slot `+98h` ->
-`GetD3D11Resource` (`1F9E90`, borrowed resource).
-The scanout is queried for IID `AAC1AA85-B883-5C29-B7C1-C2EAAEB3DA75`;
-its `ddisplay.dll` vtable `43ED8`, slot `+30h` ->
-`SetPlaneDirtyRects` (`293A0`). Rectangles use X/Y/Width/Height.
-Before drawing, replace dirty rectangles with the full frame (a superset of
-DWM's original updates); do not replace them with only the UI rectangle.
-The adapter additionally validates ddisplay image size `60000` / stamp
-`A9FD047A`, actual object vtables and getter entry bytes. Unknown layouts
-fail closed; do not widen version gates without re-verifying the native ABI.
+关键 ABI 校验依据：
 
-The adapter resolves display identity; the common policy selects target monitors:
-the swap-chain interface (`this +18h`, vtable `3084A0`) provides display
-adapter LUID / VidPn target ID (verified getters `1F1080` / `2BDBA0`).
-These identities map to active display paths and GDI monitors via
-[QueryDisplayConfig](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-querydisplayconfig).
-Topology is cached for two seconds, not enumerated on every present; concurrent
-refresh callers skip rather than wait. Equal monitor resolutions are not
-treated as equal display identities. Compatible mode draws on the primary only;
-AllDisplays permits every verified supported output with an independent session.
-Unknown mappings, rotated/scaled planes, stereo/MSAA/protected surfaces are
-skipped with a one-time reason. Supported formats: BGRA8/RGBA8/RGB10A2/RGBA16F.
-Hot-plug/primary-monitor switching and hardware-MPO promotion still need
-target-machine validation; this is not arbitrary multi-monitor UI placement.
-The existing GPU backdrop comparison/restore and asynchronous desktop
-invalidation are reused through the common render session. Backgrounds are
-isolated per chain/resource; size/format/origin changes recreate the session,
-and failed preservation skips drawing. GPU writes are flushed before the original
-ExecutePresent. Full-frame dirty rectangles prioritize correctness over
-partial-present bandwidth optimization.
+- `CDDisplaySwapChainBuffer` 虚表 RVA `300E48`，槽位 `+98h` 指向
+  `GetD3D11Resource`（`1F9E90`，返回借用资源）。
+- scanout 查询 IID `AAC1AA85-B883-5C29-B7C1-C2EAAEB3DA75`；
+  `ddisplay.dll` 虚表 `43ED8`、槽位 `+30h` 指向 `SetPlaneDirtyRects`（`293A0`），
+  矩形使用 X/Y/Width/Height。绘制前标记整帧脏区域，覆盖 DWM 原有更新范围，
+  不能仅标记 UI 区域而遗漏其他桌面更新。
+- 额外校验 `ddisplay.dll` 映像大小 `60000`、Stamp=`A9FD047A`、实际对象虚表和方法入口字节。
+  未知布局跳过绘制，未经重新确认 ABI 不放宽版本条件。
+- 交换链接口（`this +18h`、虚表 `3084A0`）提供适配器 LUID 和 VidPn target ID，
+  已验证的取值函数为 `1F1080 / 2BDBA0`。通过
+  [QueryDisplayConfig](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-querydisplayconfig)
+  映射到活动显示路径和 GDI 显示器，不以相同分辨率判断身份。
 
-Rebuild the DLL, **unload the old instance**, then inject the new one.
-Expected milestones: `Win11 DDisplay rendering path selected`,
-`Runtime ready with 1 hook(s)`, `Hook first hit`,
-`DDisplay texture adapter ready`, `DDisplay base-plane D3D11 texture acquired`,
-`Render session created`, `Present source active`, `ImGui initialized`.
-Shutdown reports the hit count and releases the renderer's texture/backdrop
-references after restoring hooks and draining callbacks.
-Target-machine rendering/ghosting/hide-show/unload validation is still required.
+显示拓扑缓存 2 秒，并发刷新调用跳过等待。“兼容默认”仅画主屏，
+“所有屏幕”允许每个已验证且受支持的目标使用独立会话。
+未知映射、旋转/缩放平面、立体、MSAA 或受保护表面跳过并记录原因。
+支持 BGRA8/RGBA8/RGB10A2/RGBA16F。
 
-Isolated checks (synthetic fixtures/WARP only; no DWM injection):
+背景按交换链/资源隔离，尺寸、格式或桌面原点变化时重建会话；背景保存失败则不绘制。
+GPU 写入在原始 `ExecutePresent` 前刷新。整帧脏区域优先保证正确性，暂不优化局部呈现带宽。
+显示器热插拔、主屏切换和硬件 MPO 切换仍需目标机器验证，不代表任意多屏布局都已验证。
+
+更新时先卸载旧 DLL，再注入新 DLL。可通过 DebugView 查看路径选择、Hook 安装及命中、
+纹理适配器就绪、渲染会话建立和 ImGui 初始化日志。隐藏时会报告缓冲区背景恢复及
+整体清理完成，关闭时会打印命中统计，在恢复 Hook 并等待回调结束后释放渲染资源。
+
+## 隔离测试
+
+以下测试仅使用模拟模块、合成纹理和 WARP，不注入 DWM，也不构建正式 DLL：
 
 ```powershell
 cmake -S tests -B ../analyze_result/win11_legacy_hook_tests_build -G "Visual Studio 16 2019" -A x64
@@ -227,39 +177,27 @@ cmake --build ../analyze_result/win11_legacy_hook_tests_build --config Release
 ctest --test-dir ../analyze_result/win11_legacy_hook_tests_build -C Release --output-on-failure
 ```
 
-Tests cover Legacy regression; the DDisplay render callback and register
-contract; exclusive hook selection, image/callee validation, nine-argument
-forwarding and exact restore; bounded native plane reads, WARP texture QI
-ownership and dirty-rect ABI; same-resolution monitor identity selection;
-four-format GPU backdrop restore/readback and pipeline-state restoration;
-two independent WARP devices/ImGui contexts, negative desktop origins,
-per-output erase tracking and repeated same-size DXGI ResizeBuffers.
-Shared renderer/router sources are also compiled
-without building the production DLL. Win10 profiles remain unchanged.
-Hub tests additionally cover settings migration and the real control-channel
-worker's display-mode synchronization/reconnect/old-peer compatibility using
-isolated test-only object names. These are not target-machine acceptance tests:
-Win10/Win11 primary/all modes, different DPI, hot-plug and ghosting still need
-validation on the user's physical and VMware systems.
+覆盖 Legacy 回归、DDisplay 回调/寄存器约定、Hook 互斥选择、映像/被调函数校验、
+九参数转发与精确恢复、原生平面读取边界、纹理 QI 引用归属、脏区域 ABI、
+同分辨率显示器身份、四种格式的背景恢复/GPU 回读及管线状态恢复。
 
-## Lifecycle
+同时验证独立 WARP 设备/ImGui 上下文、负桌面坐标、多屏隐藏、轮换缓冲区清理、
+隐藏与绘制竞争、新桌面像素保留，以及重复同尺寸 `ResizeBuffers`。
+公共渲染和路由源码也会进行编译检查，Win10 Hook 配置不变。
 
-The usual injector is CoolHelperHub: it loads the DLL via `CreateRemoteThread`
-+ `LoadLibraryW` and unloads by first invoking `ShutdownDwmOverlay` remotely,
-then `FreeLibrary`, then verifying the module is gone.
+中台测试覆盖设置迁移、显示目标同步、重连和旧版控制协议兼容，使用独立测试对象名称。
+这些测试不能替代物理机或 VMware 验收；Win10/Win11 主屏/所有屏幕选择、不同 DPI、
+热插拔、残影、隐藏/显示和卸载仍需实际测试。
 
-Call the exported `ShutdownDwmOverlay` function before `FreeLibrary`. It stops
-the answer-IPC worker, restores the patched call-site displacements, drains
-active callbacks, destroys ImGui/D3D11 resources, and frees dispatch-cell
-arenas. Cleanup is intentionally not performed from `DLL_PROCESS_DETACH` under
-the loader lock.
+## 生命周期与安全卸载
 
-The overlay window is purely a display surface: lifecycle ownership stays
-with the external controller (injection/ejection from CoolHelperHub), and
-hooks, IPC state, and renderer resources remain alive for the whole runtime.
-`ShutdownDwmOverlay` performs the complete runtime teardown, but does not
-decrement the Windows loader reference count. The injector must call
-`FreeLibrary` after the export returns. If the injector loaded a temporary
-second DLL image to invoke the export, it must release that image as well. A
-manually mapped image must be unmapped by the manual mapper because
-`FreeLibrary` cannot unload it.
+通常由中台使用 `CreateRemoteThread + LoadLibraryW` 加载 DLL。
+完整卸载必须先调用 `ShutdownDwmOverlay`，再调用 `FreeLibrary`，最后确认模块已移除。
+
+`ShutdownDwmOverlay` 停止通信工作线程、恢复调用点补丁、等待活动回调结束，
+释放 ImGui/D3D11 资源及分派单元。`DLL_PROCESS_DETACH` 不在加载器锁下执行清理。
+
+覆盖层只是显示界面，生命周期由外部控制器管理；隐藏并不卸载 Hook、IPC 或渲染资源。
+`ShutdownDwmOverlay` 也不会减少 Windows 加载器引用计数，控制器仍需调用 `FreeLibrary`。
+若为调用导出函数额外加载了临时 DLL 实例，也必须释放该实例。
+手动映射的映像由映射器移除，不能用 `FreeLibrary` 卸载。
