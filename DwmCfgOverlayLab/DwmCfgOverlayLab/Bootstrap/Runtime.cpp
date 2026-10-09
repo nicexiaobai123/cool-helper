@@ -8,7 +8,7 @@ namespace dwm_overlay {
 
 Runtime::Runtime() noexcept
 	: controlIpc_(ControlIpcService::Callbacks{
-		  &Runtime::OnControlCommand, &Runtime::QueryOverlayVisible, this }),
+		  &Runtime::OnControlCommand, &Runtime::QueryOverlayVisible, &Runtime::QueryDisplayMode, this }),
 	frameRouter_(renderer_) {}
 
 void Runtime::OnControlCommand(
@@ -16,17 +16,24 @@ void Runtime::OnControlCommand(
 	auto* runtime = static_cast<Runtime*>(context);
 	if (!runtime || !runtime->IsInitialized())
 		return;
-	if (type == kControlCommandSetOverlayVisible)
+	if (type == overlaycontrol::kControlCommandSetOverlayVisible)
 		runtime->renderer_.SetOverlayVisible(value != 0);
-	else if (type == kControlCommandScrollAnswer &&
-		(value == kControlScrollUp || value == kControlScrollDown))
+	else if (type == overlaycontrol::kControlCommandSetDisplayMode && coolhelper_overlay::IsDisplayMode(value))
+		runtime->renderer_.SetDisplayMode(static_cast<DisplayMode>(value));
+	else if (type == overlaycontrol::kControlCommandScrollAnswer &&
+		(value == overlaycontrol::kControlScrollUp || value == overlaycontrol::kControlScrollDown))
 		runtime->renderer_.RequestAnswerScroll(
-			value == kControlScrollDown ? 1 : -1);
+			value == overlaycontrol::kControlScrollDown ? 1 : -1);
 }
 
 bool Runtime::QueryOverlayVisible(void* context) noexcept {
 	auto* runtime = static_cast<Runtime*>(context);
 	return runtime && runtime->renderer_.IsOverlayVisible();
+}
+
+UINT32 Runtime::QueryDisplayMode(void* context) noexcept {
+	auto* runtime = static_cast<Runtime*>(context);
+	return runtime ? static_cast<UINT32>(runtime->renderer_.GetDisplayMode()) : UINT32_MAX;
 }
 
 Runtime& GetRuntime() noexcept {
@@ -111,6 +118,9 @@ bool Runtime::Initialize() noexcept {
 	hooks_.SetDispatchCallback(OnHook);
 	HookManager::SetActiveManager(&hooks_);
 	fingerprint_ = ProbeSystem();
+	// Compatibility default is a bootstrap decision, not adapter/renderer ABI.
+	renderer_.SetCompatibilityDefault(fingerprint_.osBuild < 22000
+		? DisplayMode::AllDisplays : DisplayMode::PrimaryOnly);
 	const auto result = InstallCompatibleHookProfiles(fingerprint_, hooks_);
 	if (!result.installedHooks) {
 		DWM_LOG("No verified presentation call-site hook could be installed");

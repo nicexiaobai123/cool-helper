@@ -45,15 +45,25 @@ add_test(NAME Win11DDisplayRenderingRelay COMMAND DwmDisplayPresentTests "$<TARG
 add_library(DwmRenderCompileCheck OBJECT
     ../DwmCfgOverlayLab/Render/OverlayRenderer.cpp
     ../DwmCfgOverlayLab/Render/FrameRouter.cpp
+    ../DwmCfgOverlayLab/Render/FrameTarget.cpp
     ../DwmCfgOverlayLab/Render/InvalidationWorker.cpp
     ../DwmCfgOverlayLab/Render/BackdropCompositor.cpp
-    ../DwmCfgOverlayLab/Render/DDisplaySurfaceAdapter.cpp)
+    ../DwmCfgOverlayLab/Render/DDisplaySurfaceAdapter.cpp
+    ../DwmCfgOverlayLab/Render/DisplayTopology.cpp
+    ../DwmCfgOverlayLab/Render/DxgiSurfaceAdapter.cpp
+    ../DwmCfgOverlayLab/Render/RenderSession.cpp
+    ../DwmCfgOverlayLab/Input/InputSource.cpp
+    ../DwmCfgOverlayLab/Bootstrap/Runtime.cpp
+    ../DwmCfgOverlayLab/IPC/ControlIpc.cpp)
 target_compile_features(DwmRenderCompileCheck PRIVATE cxx_std_17)
 target_compile_definitions(DwmRenderCompileCheck PRIVATE UNICODE _UNICODE)
 target_compile_options(DwmRenderCompileCheck PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
 
 add_executable(DwmDDisplayAdapterTests DDisplayAdapterTests.cpp
+    ../DwmCfgOverlayLab/Render/FrameTarget.cpp
     ../DwmCfgOverlayLab/Render/DDisplaySurfaceAdapter.cpp
+    ../DwmCfgOverlayLab/Render/DisplayTopology.cpp
+    ../DwmCfgOverlayLab/Render/DxgiSurfaceAdapter.cpp
     ../DwmCfgOverlayLab/Render/BackdropCompositor.cpp ${hook_sources})
 target_compile_features(DwmDDisplayAdapterTests PRIVATE cxx_std_17)
 target_compile_definitions(DwmDDisplayAdapterTests PRIVATE UNICODE _UNICODE DWM_OVERLAY_TEST_LOG_STDERR)
@@ -61,3 +71,27 @@ target_compile_options(DwmDDisplayAdapterTests PRIVATE $<$<COMPILE_LANGUAGE:CXX>
 target_link_options(DwmDDisplayAdapterTests PRIVATE /guard:cf /DYNAMICBASE)
 target_link_libraries(DwmDDisplayAdapterTests PRIVATE d3d11 dxgi d3dcompiler)
 add_test(NAME DDisplayNativeAdapter COMMAND DwmDDisplayAdapterTests)
+
+# Real renderer against synthetic WARP textures and a hidden DXGI fixture;
+# no DWM injection or desktop screenshot.
+set(imgui_sources
+    ../DwmCfgOverlayLab/IMGUI/imgui.cpp
+    ../DwmCfgOverlayLab/IMGUI/imgui_draw.cpp
+    ../DwmCfgOverlayLab/IMGUI/imgui_tables.cpp
+    ../DwmCfgOverlayLab/IMGUI/imgui_widgets.cpp
+    ../DwmCfgOverlayLab/IMGUI/imgui_impl_dx11.cpp
+    ../DwmCfgOverlayLab/IMGUI/imgui_impl_win32.cpp)
+add_executable(DwmRenderSessionTests RenderSessionTests.cpp ${imgui_sources}
+    ../DwmCfgOverlayLab/Render/RenderSession.cpp
+    ../DwmCfgOverlayLab/Render/FrameTarget.cpp
+    ../DwmCfgOverlayLab/Render/DisplayTopology.cpp
+    ../DwmCfgOverlayLab/Render/DxgiSurfaceAdapter.cpp
+    ../DwmCfgOverlayLab/Render/BackdropCompositor.cpp
+    ../DwmCfgOverlayLab/Input/InputSource.cpp
+    ../DwmCfgOverlayLab/IPC/UiState.cpp
+    ../DwmCfgOverlayLab/UI/OverlayUi.cpp)
+target_compile_features(DwmRenderSessionTests PRIVATE cxx_std_17)
+target_compile_definitions(DwmRenderSessionTests PRIVATE UNICODE _UNICODE DWM_OVERLAY_TEST_LOG_STDERR)
+target_compile_options(DwmRenderSessionTests PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+target_link_libraries(DwmRenderSessionTests PRIVATE d3d11 dxgi d3dcompiler)
+add_test(NAME NormalizedRenderSessions COMMAND DwmRenderSessionTests)

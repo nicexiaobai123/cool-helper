@@ -52,6 +52,10 @@
     <ClCompile Include="Platform\SystemProbe.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Profiles\DwmHookProfiles.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Render\FrameRouter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\FrameTarget.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\DisplayTopology.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\DxgiSurfaceAdapter.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Render\RenderSession.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Render\BackdropCompositor.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Render\InvalidationWorker.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Render\OverlayRenderer.cpp"><Filter>Core</Filter></ClCompile>
@@ -103,6 +107,10 @@
     <ClInclude Include="Profiles\DwmHookProfiles.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Profiles\Win11DDisplayProfile.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\FrameRouter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\DisplayTopology.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\DxgiSurfaceAdapter.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\RenderSession.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Render\FrameTarget.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\BackdropCompositor.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\InvalidationWorker.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Render\OverlayRenderer.h"><Filter>Core</Filter></ClInclude>

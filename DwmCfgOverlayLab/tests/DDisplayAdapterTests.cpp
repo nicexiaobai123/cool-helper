@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 using namespace dwm_overlay;
 using namespace dwm_overlay::ddisplay;
@@ -76,6 +77,16 @@ static void TestResourceOwnership() {
     desc.BindFlags = D3D11_BIND_RENDER_TARGET;
     ComPtr<ID3D11Texture2D> texture;
     Check(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture)), "Create WARP texture");
+    const UINT64 token = ResourceIdentity(texture.Get());
+    Check(token && token == ResourceIdentity(texture.Get()), "Stable resource token without retaining buffer");
+    ComPtr<ID3D11Texture2D> other;
+    Check(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &other)), "Concurrent identity texture");
+    UINT64 concurrent[8] = {}; std::thread workers[8];
+    for (int index = 0; index < 8; ++index)
+        workers[index] = std::thread([&, index] { concurrent[index] = ResourceIdentity(other.Get()); });
+    for (auto& worker : workers) worker.join();
+    for (auto value : concurrent)
+        Check(value && value == concurrent[0] && value != token, "Concurrent tagging gives one distinct identity");
     const ULONG before = texture->AddRef(); texture->Release();
     ComPtr<ID3D11Texture2D> acquired;
     Check(SUCCEEDED(QueryBufferTexture(texture.Get(), BorrowedResource, &acquired)) &&
@@ -106,23 +117,31 @@ static void TestDirtyRects() {
 }
 
 static void TestDisplayIdentity() {
-    DisplayTarget primary;
-    primary.adapter = { 7, 2 }; primary.targetId = 11;
+    dwm_overlay::DisplayTarget primary;
+    primary.monitor = reinterpret_cast<HMONITOR>(1);
     primary.desktop = { 0, 0, 1920, 1080 };
-    primary.primary = primary.unrotated = true;
-    DisplayTarget secondary = primary;
-    secondary.targetId = 12;
+    primary.primary = true;
+    dwm_overlay::DisplayTarget secondary = primary;
+    secondary.monitor = reinterpret_cast<HMONITOR>(2);
     secondary.primary = false;
-    secondary.desktop = { 1920, 0, 3840, 1080 };
-    Check(IsPrimaryTarget(primary, primary.adapter, 11, 1920, 1080), "Select exact primary identity");
-    Check(!IsPrimaryTarget(primary, primary.adapter, 12, 1920, 1080) &&
-        !IsPrimaryTarget(secondary, secondary.adapter, 12, 1920, 1080),
-        "Same-resolution secondary monitor must not be selected");
-    const LUID otherAdapter = { 8, 2 };
-    Check(!IsPrimaryTarget(primary, otherAdapter, 11, 1920, 1080), "Different display adapter rejected");
-    Check(!IsPrimaryTarget(primary, primary.adapter, 11, 1280, 720), "Scaled base plane rejected");
+    secondary.desktop = { -1920, 0, 0, 1080 };
+    Check(AllowsDisplay(primary, DisplayMode::PrimaryOnly, DisplayMode::AllDisplays) &&
+        !AllowsDisplay(secondary, DisplayMode::PrimaryOnly, DisplayMode::AllDisplays),
+        "Common primary-only policy for both adapters");
+    Check(AllowsDisplay(secondary, DisplayMode::AllDisplays, DisplayMode::PrimaryOnly) &&
+        FitsDisplay(secondary, 1920, 1080), "Same-size secondary and negative desktop coordinates");
+    Check(AllowsDisplay(primary, DisplayMode::Compatible, DisplayMode::AllDisplays) &&
+        !AllowsDisplay(secondary, DisplayMode::Compatible, DisplayMode::PrimaryOnly),
+        "Compatibility defaults retained outside adapters");
+    Check(!FitsDisplay(primary, 1280, 720), "Scaled base plane rejected");
     primary.unrotated = false;
-    Check(!IsPrimaryTarget(primary, primary.adapter, 11, 1920, 1080), "Rotated plane rejected");
+    Check(!AllowsDisplay(primary, DisplayMode::AllDisplays, DisplayMode::AllDisplays),
+        "Rotated native plane rejected");
+    dwm_overlay::DisplayTarget unknown;
+    Check(!AllowsDisplay(unknown, DisplayMode::PrimaryOnly, DisplayMode::AllDisplays) &&
+        !AllowsDisplay(unknown, DisplayMode::AllDisplays, DisplayMode::AllDisplays) &&
+        AllowsDisplay(unknown, DisplayMode::Compatible, DisplayMode::AllDisplays),
+        "Unknown mapping never guessed in explicit policies");
 }
 
 static void TestBackdropRoundTrip() {

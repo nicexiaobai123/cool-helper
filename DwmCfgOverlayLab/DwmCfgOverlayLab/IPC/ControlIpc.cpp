@@ -4,6 +4,8 @@
 
 namespace dwm_overlay {
 
+using namespace coolhelper_overlay;
+
 ControlIpcService::ControlIpcService(const Callbacks& callbacks) noexcept
 	: callbacks_(callbacks) {}
 
@@ -69,7 +71,16 @@ void ControlIpcService::WorkerLoop() noexcept {
 			header_->dllHeartbeatTick = GetTickCount64();
 			const bool visible = !callbacks_.QueryOverlayVisible ||
 				callbacks_.QueryOverlayVisible(callbacks_.context);
-			header_->dllOverlayVisible = visible ? 1 : 0;
+            header_->dllOverlayVisible = visible ? 1 : 0;
+            const UINT32 desired = header_->hubDisplayMode;
+            if (IsDisplayMode(desired) && desired != appliedDisplayMode_ && callbacks_.OnCommand) {
+                callbacks_.OnCommand(callbacks_.context, kControlCommandSetDisplayMode, desired);
+                appliedDisplayMode_ = desired;
+            }
+            if (callbacks_.QueryDisplayMode) {
+                const UINT32 applied = callbacks_.QueryDisplayMode(callbacks_.context);
+                header_->dllDisplayState = IsDisplayMode(applied) ? kDisplayPolicyCapability | applied : 0;
+            }
 		}
 		else {
 			Detach("hub heartbeat lost");
@@ -113,6 +124,7 @@ bool ControlIpcService::TryAttach() noexcept {
 
 	mapping_ = mapping;
 	header_ = view;
+    appliedDisplayMode_ = UINT32_MAX;
 	readyEvent_ = readyEvent;
 	header_->readIndex = 0;
 	header_->dllOverlayVisible = callbacks_.QueryOverlayVisible &&
@@ -135,7 +147,9 @@ void ControlIpcService::Detach(const char* reason) noexcept {
 		readyEvent_ = nullptr;
 	}
 	if (header_) {
-		UnmapViewOfFile(header_);
+		header_->dllHeartbeatTick = 0;
+        header_->dllDisplayState = 0;
+        UnmapViewOfFile(header_);
 		header_ = nullptr;
 	}
 	if (mapping_) {

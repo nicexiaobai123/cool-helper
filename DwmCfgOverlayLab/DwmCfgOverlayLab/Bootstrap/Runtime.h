@@ -29,6 +29,7 @@ private:
 	static void OnControlCommand(
 		void* context, UINT32 type, UINT32 value) noexcept;
 	static bool QueryOverlayVisible(void* context) noexcept;
+    static UINT32 QueryDisplayMode(void* context) noexcept;
 	void PublishStatus() noexcept;
 
 	SRWLOCK lifecycleLock_ = SRWLOCK_INIT;

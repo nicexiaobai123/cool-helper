@@ -8,7 +8,7 @@ namespace dwm_overlay {
 
 inline void Log(const char* message) noexcept {
 	char line[640] = {};
-	_snprintf_s(line, _countof(line), _TRUNCATE,
+	_snprintf_s(line, sizeof(line), _TRUNCATE,
 		"[DwmCfgOverlayLab] %s\n", message ? message : "");
 	// Keep the complete record in one debug event. DebugView treats every
 	// OutputDebugString call as an independent row.
@@ -22,7 +22,7 @@ inline void LogFormat(const char* format, ...) noexcept {
 	char message[512] = {};
 	va_list arguments;
 	va_start(arguments, format);
-	_vsnprintf_s(message, _countof(message), _TRUNCATE, format, arguments);
+	_vsnprintf_s(message, sizeof(message), _TRUNCATE, format, arguments);
 	va_end(arguments);
 	Log(message);
 }

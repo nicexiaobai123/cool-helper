@@ -152,6 +152,21 @@ bool OverlayControlChannel::SendScrollAnswer(int direction) noexcept {
 			: overlaycontrol::kControlScrollUp);
 }
 
+bool OverlayControlChannel::SetDisplayMode(DisplayMode mode) noexcept {
+    if (!running_ || !header_ || !overlaycontrol::IsDisplayMode(static_cast<UINT32>(mode))) return false;
+    InterlockedExchange(reinterpret_cast<volatile LONG*>(&header_->hubDisplayMode), static_cast<LONG>(mode));
+    if (readyEvent_) SetEvent(readyEvent_);
+    return true;
+}
+
+int OverlayControlChannel::QueryDisplayMode() const noexcept {
+    if (!header_ || !IsDllConnected()) return -1;
+    const UINT32 state = header_->dllDisplayState;
+    const UINT32 value = state & ~overlaycontrol::kDisplayPolicyCapability;
+    return (state & overlaycontrol::kDisplayPolicyCapability) && overlaycontrol::IsDisplayMode(value)
+        ? static_cast<int>(value) : -1;
+}
+
 bool OverlayControlChannel::SendCommand(UINT32 type, UINT32 value) noexcept {
 	ControlSharedHeader* header = header_;
 	if (!running_ || !header)

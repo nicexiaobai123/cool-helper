@@ -133,7 +133,10 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 		settings.userPrompt = document.value("userPrompt", settings.userPrompt);
 		settings.overlayDllPath = document.value("overlayDllPath",
 			settings.overlayDllPath);
-		// Upgrade only the original defaults. User-authored prompts are preserved.
+        const UINT32 displayMode = document.value("overlayDisplayMode", 0u);
+        settings.overlayDisplayMode = coolhelper_overlay::IsDisplayMode(displayMode)
+            ? static_cast<DisplayMode>(displayMode) : DisplayMode::Compatible;
+        // Upgrade only the original defaults. User-authored prompts are preserved.
 		if (settings.systemPrompt == kLegacySystemPrompt)
 			settings.systemPrompt = kDefaultInterviewSystemPrompt;
 		if (settings.userPrompt == kLegacyUserPrompt)
@@ -278,13 +281,14 @@ bool SettingsStore::Save(
 			return false;
 		}
 		const json document = {
-			{ "version", 8 },
+			{ "version", 9 },
 			{ "apiBaseUrl", settings.apiBaseUrl },
 			{ "apiKeyProtected", protectedKey },
 			{ "model", settings.model },
 			{ "systemPrompt", settings.systemPrompt },
 			{ "userPrompt", settings.userPrompt },
 			{ "overlayDllPath", settings.overlayDllPath },
+            { "overlayDisplayMode", static_cast<UINT32>(settings.overlayDisplayMode) },
 			{ "captureHotkey", {
 				{ "control", settings.captureHotkey.control },
 				{ "alt", settings.captureHotkey.alt },

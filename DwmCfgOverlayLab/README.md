@@ -29,8 +29,9 @@ Bootstrap/Runtime
   -> Profiles/DwmHookProfiles
   -> Scanner/PatternScanner
   -> Hooks/HookManager -> AsmHook.asm
-  -> Render/FrameRouter -> Render/DDisplaySurfaceAdapter (Win11)
-                       -> Render/OverlayRenderer (shared)
+  -> Render/FrameRouter -> DxgiSurfaceAdapter / DDisplaySurfaceAdapter
+                       -> FrameTarget -> OverlayRenderer (display policy)
+                                      -> RenderSession (per display/device)
   -> UI/OverlayUi <-> IPC/UiState
   -> IPC/AnswerIpc (CoolHelperHub answer stream)
 ```
@@ -45,10 +46,14 @@ Bootstrap/Runtime
 - `AsmHook.asm` captures a generic register context. The Win10 bridge
   tail-jumps to the virtual target; the Win11 bridge returns through a nearby
   relay and the original fothk/XFG dispatcher.
-- `FrameRouter` is the extension point for presentation objects that are not
-  directly `IDXGISwapChain` compatible.
-- `OverlayRenderer` owns all D3D11 and ImGui state. `OverlayUi` has no knowledge
-  of hooks or transport.
+- `FrameRouter` selects a surface adapter. Adapters normalize textures,
+  display identity and optional pre/post-draw operations into `FrameTarget`;
+  only the DDisplay adapter knows its private ABI. Borrowed callback arguments
+  and native objects never escape the synchronous presentation callback.
+- `DisplayTopology` resolves display identities; `OverlayRenderer` applies the
+  common display policy and manages bounded sessions. `RenderSession` owns
+  D3D11, ImGui, fonts and backdrop state for one display/device. `OverlayUi`
+  has no knowledge of hooks, Windows versions or transport.
 - `UiStateStore` and `OverlayCommandQueue` are bounded/non-blocking on the
   Present side, ready for a dedicated IPC worker.
 - `AnswerIpcService` runs on its own worker thread and consumes a lock-free
@@ -59,8 +64,8 @@ Bootstrap/Runtime
   `IPC/AnswerIpc.h` and CoolHelperHub's `include/coolhelper/OverlayIpc.h` and
   must stay byte-identical. The worker only starts once the runtime is a
   verified owner (hooks installed); the Present thread only takes an SRWLock
-  to copy the current markdown text, which `OverlayUi` renders onto the single
-  existing overlay window with a dark translucent style and a markdown subset
+  to copy the current markdown text, which `OverlayUi` renders independently
+  on each selected display with a dark translucent style and a markdown subset
   (headings with accent underlines, bold, inline code, fenced code blocks,
   bullets and ordered lists with nesting, blockquotes, pipe tables, links,
   horizontal rules) plus streaming auto-scroll.
@@ -76,14 +81,38 @@ Bootstrap/Runtime
   recomposition lands on a given frame (desktop/wallpaper repaints are
   irregular), windows passing over the overlay leave no ghosting, and the
   glass shows the live desktop.
-- Control channel (`IPC/ControlIpc.h`, mirrored in CoolHelperHub's
-  `include/coolhelper/OverlayControl.h`): a small hub-to-DLL ring buffer
+- Control channel (shared `../Shared/OverlayControlProtocol.h`): a small hub-to-DLL ring buffer
   (`Local\CoolHelper.Overlay.Control.v1`) carrying low-frequency commands,
-  currently `SetOverlayVisible` (hide/show the overlay window). The DLL
+  carrying visibility and scrolling commands. The DLL
   reports its actual visibility and heartbeats back through the shared
   header, so the hub toggles against the real state and a hub restart
   cannot desync it. The hub registers the global Ctrl+Alt+H hotkey and
-  sends the toggle; new command types extend the same ring.
+  sends the toggle; new command types extend the same ring. Reserved header
+  fields now carry durable desired display mode and a capability/acknowledgment
+  word without changing the v1 size or existing commands. A reconnect reapplies
+  the selected mode; an old DLL is reported as not supporting display selection.
+
+### Common display policy and state
+
+The hub offers Compatible, PrimaryOnly and AllDisplays. Bootstrap supplies
+the compatibility default (Win10 unrestricted; Win11 primary-only), rather
+than embedding this decision in an adapter. Explicit primary/all modes require
+a known monitor and an unrotated, correctly sized target. An unmapped legacy
+Win10 swap chain may render only under Compatible mode, preserving its previous
+behavior; it is never assigned to a monitor based on resolution alone.
+
+Up to eight display/device sessions maintain independent ImGui contexts, DPI
+fonts, UI layout and background copies. Each has up to eight chain/resource
+backdrops. Verified DXGI flip buffers also carry a generation anchor so
+same-size ResizeBuffers retires stale copies. No original GetBuffer texture
+reference is retained between callbacks. Unknown native generations are not
+guessed: if their bounded cache fills, that target stops drawing safely.
+
+Answers remain shared; each session consumes the same accumulated scroll
+commands independently. Mouse coordinates and invalidation rectangles use the
+monitor's desktop origin, including negative coordinates. Hide, policy changes
+and shutdown erase tracked regions across all outputs. This separation allows
+new presentation adapters without duplicating fonts, UI or display policy.
 
 ## Adding a Windows build or presentation path
 
@@ -92,8 +121,10 @@ Bootstrap/Runtime
 2. Add a `HookSpec` with a narrow build range and the verified argument source.
    Match the supported OS/module build families; cumulative-update revisions
    can share a profile only while its semantic function/call patterns match.
-3. If the hook argument is not swap-chain compatible, add an adapter in
-   `Render/FrameRouter.cpp`.
+3. If the hook argument is not swap-chain compatible, add a surface adapter
+   producing `FrameTarget` and register it in `Render/FrameRouter.cpp`. Resolve
+   real output identity and keep private ABI/preparation callbacks in the adapter;
+   do not add Windows-specific selection or UI code to the shared renderer.
 4. Test that the function pattern is unique and that the selected instruction
    is either the intended `FF 15 disp32` CFG dispatch call, an `E8 rel32`
    into `fothk`, or an explicitly verified local callee with its own adapter.
@@ -129,7 +160,7 @@ CDDisplaySwapChain::PresentMPO (RVA 140910)
   -> R8 plane array / R9D count, select enabled base plane 0
   -> CDDisplaySwapChainBuffer::GetD3D11Resource
   -> QueryInterface(ID3D11Texture2D)
-  -> OverlayRenderer::RenderTexture (existing ImGui/IPC/Markdown)
+  -> FrameTarget -> common display policy -> per-display RenderSession
   -> original CDDisplaySwapChain::ExecutePresent (RVA 2BD2C4)
 ```
 
@@ -150,22 +181,23 @@ The adapter additionally validates ddisplay image size `60000` / stamp
 `A9FD047A`, actual object vtables and getter entry bytes. Unknown layouts
 fail closed; do not widen version gates without re-verifying the native ABI.
 
-The adapter selects only the primary monitor, including multi-monitor setups:
+The adapter resolves display identity; the common policy selects target monitors:
 the swap-chain interface (`this +18h`, vtable `3084A0`) provides display
 adapter LUID / VidPn target ID (verified getters `1F1080` / `2BDBA0`).
-These identities map to active display paths and the primary GDI monitor via
+These identities map to active display paths and GDI monitors via
 [QueryDisplayConfig](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-querydisplayconfig).
 Topology is cached for two seconds, not enumerated on every present; concurrent
 refresh callers skip rather than wait. Equal monitor resolutions are not
-treated as equal display identities. The UI is drawn on the primary only.
+treated as equal display identities. Compatible mode draws on the primary only;
+AllDisplays permits every verified supported output with an independent session.
 Unknown mappings, rotated/scaled planes, stereo/MSAA/protected surfaces are
 skipped with a one-time reason. Supported formats: BGRA8/RGBA8/RGB10A2/RGBA16F.
 Hot-plug/primary-monitor switching and hardware-MPO promotion still need
 target-machine validation; this is not arbitrary multi-monitor UI placement.
 The existing GPU backdrop comparison/restore and asynchronous desktop
-invalidation are reused. DDisplay keeps separate backdrop state per rotating
-texture (bounded to four), resets it on chain/size/format changes, and skips
-drawing if preservation fails. GPU writes are flushed before the original
+invalidation are reused through the common render session. Backgrounds are
+isolated per chain/resource; size/format/origin changes recreate the session,
+and failed preservation skips drawing. GPU writes are flushed before the original
 ExecutePresent. Full-frame dirty rectangles prioritize correctness over
 partial-present bandwidth optimization.
 
@@ -173,7 +205,7 @@ Rebuild the DLL, **unload the old instance**, then inject the new one.
 Expected milestones: `Win11 DDisplay rendering path selected`,
 `Runtime ready with 1 hook(s)`, `Hook first hit`,
 `DDisplay texture adapter ready`, `DDisplay base-plane D3D11 texture acquired`,
-`Present source active`, `ImGui initialized`.
+`Render session created`, `Present source active`, `ImGui initialized`.
 Shutdown reports the hit count and releases the renderer's texture/backdrop
 references after restoring hooks and draining callbacks.
 Target-machine rendering/ghosting/hide-show/unload validation is still required.
@@ -190,9 +222,16 @@ Tests cover Legacy regression; the DDisplay render callback and register
 contract; exclusive hook selection, image/callee validation, nine-argument
 forwarding and exact restore; bounded native plane reads, WARP texture QI
 ownership and dirty-rect ABI; same-resolution monitor identity selection;
-four-format GPU backdrop restore/readback and pipeline-state restoration.
+four-format GPU backdrop restore/readback and pipeline-state restoration;
+two independent WARP devices/ImGui contexts, negative desktop origins,
+per-output erase tracking and repeated same-size DXGI ResizeBuffers.
 Shared renderer/router sources are also compiled
 without building the production DLL. Win10 profiles remain unchanged.
+Hub tests additionally cover settings migration and the real control-channel
+worker's display-mode synchronization/reconnect/old-peer compatibility using
+isolated test-only object names. These are not target-machine acceptance tests:
+Win10/Win11 primary/all modes, different DPI, hot-plug and ghosting still need
+validation on the user's physical and VMware systems.
 
 ## Lifecycle
 

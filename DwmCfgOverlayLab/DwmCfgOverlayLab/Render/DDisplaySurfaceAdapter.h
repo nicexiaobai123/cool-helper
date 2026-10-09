@@ -3,7 +3,7 @@
 #include <d3d11.h>
 #include <inspectable.h>
 #include <wrl/client.h>
-#include <array>
+#include "FrameTarget.h"
 
 #include "../Hooks/HookTypes.h"
 
@@ -37,33 +37,15 @@ HRESULT QueryBufferTexture(void* buffer, GetResource getter, ID3D11Texture2D** t
 HRESULT SetFullPlaneDirtyRects(IDisplayScanoutDirty* scanout, UINT32 plane,
 	UINT width, UINT height) noexcept;
 
-struct DisplayTarget {
-	LUID adapter = {};
-	UINT32 targetId = 0;
-	RECT desktop = {};
-	bool primary = false;
-	bool unrotated = false;
-};
-// Match display identity, not resolution: two monitors can have equal sizes.
-bool IsPrimaryTarget(const DisplayTarget& target, const LUID& adapter,
-	UINT32 targetId, UINT width, UINT height) noexcept;
-
 } // namespace ddisplay
-
-struct DDisplayFrame {
-	Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-	Microsoft::WRL::ComPtr<ddisplay::IDisplayScanoutDirty> dirtyScanout;
-	UINT32 planeIndex = 0;
-};
 
 class DDisplaySurfaceAdapter final {
 public:
-	bool Acquire(const HookCpuContext& context, DDisplayFrame& frame) noexcept;
+	bool Acquire(const HookCpuContext& context, DisplayTopology& topology, FrameTarget& frame) noexcept;
 private:
 	bool EnsureLayout() noexcept;
 	bool EnsureLayoutLocked() noexcept;
-	bool IsPrimaryDisplay(UINT64 chain, UINT width, UINT height) noexcept;
-	void RefreshDisplays() noexcept;
+	bool ReadDisplayIdentity(UINT64 chain, LUID& adapter, UINT32& targetId) noexcept;
 	SRWLOCK layoutLock_ = SRWLOCK_INIT;
 	bool layoutChecked_ = false;
 	bool layoutValid_ = false;
@@ -72,10 +54,6 @@ private:
 	UINT64 dirtyVtable_ = 0;
 	UINT64 chainVtable_ = 0;
 	ddisplay::GetResource getResource_ = nullptr;
-	SRWLOCK displayLock_ = SRWLOCK_INIT;
-	ULONGLONG nextDisplayRefresh_ = 0;
-	std::array<ddisplay::DisplayTarget, 32> displays_ = {};
-	UINT32 displayCount_ = 0;
 };
 
 } // namespace dwm_overlay

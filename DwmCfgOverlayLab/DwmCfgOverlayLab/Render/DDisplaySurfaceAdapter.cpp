@@ -4,7 +4,6 @@
 #include <cstring>
 #include <climits>
 #include <limits>
-#include <cwchar>
 
 namespace dwm_overlay {
 namespace {
@@ -51,41 +50,9 @@ bool SupportedTexture(const D3D11_TEXTURE2D_DESC& desc) noexcept {
 		!(desc.MiscFlags & D3D11_RESOURCE_MISC_HW_PROTECTED);
 }
 
-struct MonitorSearch {
-	const WCHAR* device;
-	RECT desktop = {};
-	bool found = false;
-	bool primary = false;
-};
-
-BOOL CALLBACK FindMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM parameter) {
-	auto& search = *reinterpret_cast<MonitorSearch*>(parameter);
-	MONITORINFOEXW info = {};
-	info.cbSize = sizeof(info);
-	if (GetMonitorInfoW(monitor, &info) && std::wcscmp(info.szDevice, search.device) == 0) {
-		search.desktop = info.rcMonitor;
-		search.primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
-		search.found = true;
-		return FALSE;
-	}
-	return TRUE;
-}
-
 } // namespace
 
 namespace ddisplay {
-
-bool IsPrimaryTarget(const DisplayTarget& target, const LUID& adapter,
-	UINT32 targetId, UINT width, UINT height) noexcept {
-	return target.adapter.LowPart == adapter.LowPart &&
-		target.adapter.HighPart == adapter.HighPart && target.targetId == targetId &&
-		target.primary && target.unrotated &&
-		// Existing UI input and invalidation use primary-desktop coordinates.
-		target.desktop.left == 0 && target.desktop.top == 0 &&
-		target.desktop.right > 0 && target.desktop.bottom > 0 &&
-		width == static_cast<UINT>(target.desktop.right) &&
-		height == static_cast<UINT>(target.desktop.bottom);
-}
 
 bool SelectBasePlane(UINT64 planes, UINT32 count, PlaneHeader& result) noexcept {
 	result = {};
@@ -187,77 +154,23 @@ bool DDisplaySurfaceAdapter::EnsureLayoutLocked() noexcept {
 	return true;
 }
 
-void DDisplaySurfaceAdapter::RefreshDisplays() noexcept {
-	// Bounded, cached OS queries, not per-present enumeration. No resolution-
-	// based fallback: stale/missing display identity must fail closed.
-	displayCount_ = 0;
-	DISPLAYCONFIG_PATH_INFO paths[32] = {};
-	DISPLAYCONFIG_MODE_INFO modes[64] = {};
-	UINT32 pathCount = 32, modeCount = 64;
-	const LONG result = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount,
-		paths, &modeCount, modes, nullptr);
-	if (result != ERROR_SUCCESS) {
-		DWM_LOG_ONCE("DDisplay adapter: active display topology unavailable; frame skipped");
-		return;
-	}
-	for (UINT32 index = 0; index < pathCount; ++index) {
-		const auto& path = paths[index];
-		DISPLAYCONFIG_SOURCE_DEVICE_NAME name = {};
-		name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
-		name.header.size = sizeof(name);
-		name.header.adapterId = path.sourceInfo.adapterId;
-		name.header.id = path.sourceInfo.id;
-		if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS) continue;
-		MonitorSearch search = { name.viewGdiDeviceName };
-		EnumDisplayMonitors(nullptr, nullptr, FindMonitor, reinterpret_cast<LPARAM>(&search));
-		if (!search.found) continue;
-		auto& target = displays_[displayCount_++];
-		target.adapter = path.targetInfo.adapterId;
-		target.targetId = path.targetInfo.id;
-		target.desktop = search.desktop;
-		target.primary = search.primary;
-		target.unrotated = path.targetInfo.rotation == DISPLAYCONFIG_ROTATION_IDENTITY;
-	}
+bool DDisplaySurfaceAdapter::ReadDisplayIdentity(UINT64 chain, LUID& adapter, UINT32& targetId) noexcept {
+    UINT64 vtable = 0;
+    return chain && chain <= (std::numeric_limits<UINT64>::max)() - 0x58 &&
+        ReadBytes(chain + 0x18, &vtable, sizeof(vtable)) && vtable == chainVtable_ &&
+        ReadBytes(chain + 0x4C, &adapter, sizeof(adapter)) &&
+        ReadBytes(chain + 0x54, &targetId, sizeof(targetId));
 }
 
-bool DDisplaySurfaceAdapter::IsPrimaryDisplay(UINT64 chain, UINT width, UINT height) noexcept {
-	UINT64 vtable = 0;
-	LUID adapter = {};
-	UINT32 targetId = 0;
-	// ExecutePresent RCX is the object base; the verified swap-chain interface
-	// lives at +18h. Its display LUID/target getters read +34h/+3Ch respectively.
-	if (!chain || chain > (std::numeric_limits<UINT64>::max)() - 0x58 ||
-		!ReadBytes(chain + 0x18, &vtable, sizeof(vtable)) || vtable != chainVtable_ ||
-		!ReadBytes(chain + 0x4C, &adapter, sizeof(adapter)) ||
-		!ReadBytes(chain + 0x54, &targetId, sizeof(targetId))) {
-		DWM_LOG_ONCE("DDisplay adapter: unverified swap-chain display identity; frame skipped");
-		return false;
-	}
-	// Concurrent callers skip rather than wait behind a topology refresh.
-	if (!TryAcquireSRWLockExclusive(&displayLock_)) return false;
-	const ULONGLONG now = GetTickCount64();
-	if (now >= nextDisplayRefresh_) {
-		RefreshDisplays();
-		nextDisplayRefresh_ = GetTickCount64() + 2000;
-	}
-	bool primary = false;
-	for (UINT32 index = 0; index < displayCount_; ++index) {
-		if (ddisplay::IsPrimaryTarget(displays_[index], adapter, targetId, width, height)) {
-			primary = true;
-			break;
-		}
-	}
-	ReleaseSRWLockExclusive(&displayLock_);
-	if (primary) {
-		DWM_LOG_ONCE("DDisplay primary display identified by adapter LUID/target ID");
-	}
-	else {
-		DWM_LOG_ONCE("DDisplay adapter: secondary/rotated/scaled or unmapped display skipped");
-	}
-	return primary;
+namespace {
+HRESULT PrepareDDisplay(void* scanout, UINT32 plane, UINT width, UINT height) noexcept {
+    return ddisplay::SetFullPlaneDirtyRects(
+        static_cast<ddisplay::IDisplayScanoutDirty*>(scanout), plane, width, height);
+}
+void FinishDDisplay(ID3D11DeviceContext* context) noexcept { context->Flush(); }
 }
 
-bool DDisplaySurfaceAdapter::Acquire(const HookCpuContext& context, DDisplayFrame& frame) noexcept {
+bool DDisplaySurfaceAdapter::Acquire(const HookCpuContext& context, DisplayTopology& topology, FrameTarget& frame) noexcept {
 	frame = {};
 	if (!EnsureLayout()) return false;
 	ddisplay::PlaneHeader plane = {};
@@ -288,16 +201,31 @@ bool DDisplaySurfaceAdapter::Acquire(const HookCpuContext& context, DDisplayFram
 		DWM_LOG_ONCE("DDisplay adapter: unsupported format/protected texture; frame skipped");
 		return false;
 	}
-	if (!IsPrimaryDisplay(context.rcx, desc.Width, desc.Height)) return false;
+	LUID adapter = {}; UINT32 targetId = 0;
+    if (!ReadDisplayIdentity(context.rcx, adapter, targetId) ||
+        !topology.Resolve(adapter, targetId, frame.display) ||
+        !FitsDisplay(frame.display, desc.Width, desc.Height)) {
+        DWM_LOG_ONCE("DDisplay adapter: unverified/rotated/scaled display target skipped");
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ddisplay::IDisplayScanoutDirty> dirtyScanout;
 	if (!ReadBytes(context.rdx, &vtable, sizeof(vtable)) || vtable != scanoutVtable_ ||
-		FAILED(QueryDirtyScanout(reinterpret_cast<void*>(context.rdx), frame.dirtyScanout.GetAddressOf())) ||
-		!frame.dirtyScanout ||
-		!ReadBytes(reinterpret_cast<UINT64>(frame.dirtyScanout.Get()), &vtable, sizeof(vtable)) ||
+		FAILED(QueryDirtyScanout(reinterpret_cast<void*>(context.rdx), dirtyScanout.GetAddressOf())) ||
+		!dirtyScanout ||
+		!ReadBytes(reinterpret_cast<UINT64>(dirtyScanout.Get()), &vtable, sizeof(vtable)) ||
 		vtable != dirtyVtable_) {
 		DWM_LOG_ONCE("DDisplay adapter: scanout dirty-rect interface unavailable; frame skipped");
 		return false;
 	}
-	frame.planeIndex = plane.index;
+	frame.description = desc;
+    frame.chainIdentity = context.rcx;
+    frame.resourceIdentity = ResourceIdentity(frame.texture.Get());
+    if (!frame.resourceIdentity) return false;
+    frame.operationOwner = dirtyScanout;
+    frame.operationContext = dirtyScanout.Get();
+    frame.plane = plane.index;
+    frame.PrepareDraw = PrepareDDisplay;
+    frame.FinishDraw = FinishDDisplay;
 	DWM_LOG_ONCE("DDisplay base-plane D3D11 texture acquired");
 	return true;
 }

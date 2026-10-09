@@ -156,7 +156,11 @@
     <ClCompile Include="Platform\SystemProbe.cpp" />
     <ClCompile Include="Profiles\DwmHookProfiles.cpp" />
     <ClCompile Include="Render\BackdropCompositor.cpp" />
+    <ClCompile Include="Render\DisplayTopology.cpp" />
+    <ClCompile Include="Render\DxgiSurfaceAdapter.cpp" />
+    <ClCompile Include="Render\RenderSession.cpp" />
     <ClCompile Include="Render\FrameRouter.cpp" />
+    <ClCompile Include="Render\FrameTarget.cpp" />
     <ClCompile Include="Render\InvalidationWorker.cpp" />
     <ClCompile Include="Render\OverlayRenderer.cpp" />
     <ClCompile Include="Scanner\PatternScanner.cpp" />
@@ -187,6 +191,10 @@
     <ClInclude Include="Platform\SystemProbe.h" />
     <ClInclude Include="Profiles\DwmHookProfiles.h" />
     <ClInclude Include="Render\BackdropCompositor.h" />
+    <ClInclude Include="Render\DisplayTopology.h" />
+    <ClInclude Include="Render\DxgiSurfaceAdapter.h" />
+    <ClInclude Include="Render\RenderSession.h" />
+    <ClInclude Include="Render\FrameTarget.h" />
     <ClInclude Include="Render\FrameRouter.h" />
     <ClInclude Include="Render\InvalidationWorker.h" />
     <ClInclude Include="Render\OverlayRenderer.h" />

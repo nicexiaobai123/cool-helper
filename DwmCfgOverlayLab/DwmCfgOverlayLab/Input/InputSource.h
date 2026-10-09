@@ -1,4 +1,5 @@
 #pragma once
+#include <Windows.h>
 
 #include "../IMGUI/imgui.h"
 
@@ -15,6 +16,9 @@ public:
 class DesktopPollingInputSource final : public IInputSource {
 public:
 	void Update(ImGuiIO& io) noexcept override;
+    void SetDesktopOrigin(POINT origin) noexcept { origin_ = origin; }
+private:
+    POINT origin_ = {};
 };
 
 } // namespace dwm_overlay

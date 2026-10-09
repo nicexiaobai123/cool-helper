@@ -1,4 +1,5 @@
 #pragma once
+#include "../../../Shared/OverlayControlProtocol.h"
 
 #include <cstdint>
 #include <string>
@@ -69,6 +70,8 @@ struct CaptureHotkeySettings {
 	std::uint32_t virtualKey = 'S';
 };
 
+using DisplayMode = coolhelper_overlay::DisplayMode;
+
 struct AppSettings {
 	std::string apiBaseUrl = "https://api.openai.com/v1";
 	std::string apiKey;
@@ -84,6 +87,7 @@ struct AppSettings {
 		.control = true, .alt = true, .virtualKey = 0xBDu}; // VK_OEM_MINUS
 	// Empty means "<exe directory>\DwmCfgOverlayLab.dll".
 	std::string overlayDllPath;
+    DisplayMode overlayDisplayMode = DisplayMode::Compatible;
 };
 
 enum class AnswerEventType {

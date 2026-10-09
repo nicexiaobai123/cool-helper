@@ -3,33 +3,26 @@
 #include "../Common/Log.h"
 
 namespace dwm_overlay {
-
 void FrameRouter::Route(const HookInvocation& invocation) noexcept {
-	if (!invocation.specification || !invocation.argument)
-		return;
-
-	// Native DDisplay buffers are not IDXGISwapChain-compatible.
-	switch (invocation.specification->kind) {
-	case PresentKind::DDisplayMultiplaneOverlay: {
-		if (!invocation.cpuContext || renderer_.IsDestroyed() || !renderer_.IsOverlayVisible())
-			return;
-		DDisplayFrame frame;
-		if (!displayAdapter_.Acquire(*invocation.cpuContext, frame))
-			return;
-		renderer_.RenderTexture(frame.texture.Get(), *invocation.specification,
-			invocation.cpuContext->rcx, frame.dirtyScanout.Get(), frame.planeIndex);
-		break;
-	}
-	case PresentKind::DxgiPresent:
-	case PresentKind::DxgiPresent1:
-	case PresentKind::MultiplaneOverlay:
-	case PresentKind::VmwarePresentInternal:
-		renderer_.Render(invocation.argument, *invocation.specification);
-		break;
-	default:
-		DWM_LOG_ONCE("Unsupported frame-target adapter");
-		break;
-	}
+    if (!invocation.specification || !invocation.argument ||
+        renderer_.IsDestroyed() || !renderer_.IsOverlayVisible()) return;
+    FrameTarget frame;
+    switch (invocation.specification->kind) {
+    case PresentKind::DDisplayMultiplaneOverlay:
+        if (!invocation.cpuContext ||
+            !displayAdapter_.Acquire(*invocation.cpuContext, topology_, frame)) return;
+        break;
+    case PresentKind::DxgiPresent:
+    case PresentKind::DxgiPresent1:
+    case PresentKind::MultiplaneOverlay:
+    case PresentKind::VmwarePresentInternal:
+        if (!dxgiAdapter_.Acquire(invocation.argument, frame)) {
+            DWM_LOG_ONCE("Unable to acquire DXGI frame target"); return;
+        }
+        break;
+    default:
+        DWM_LOG_ONCE("Unsupported frame-target adapter"); return;
+    }
+    renderer_.Render(frame, *invocation.specification);
 }
-
 } // namespace dwm_overlay

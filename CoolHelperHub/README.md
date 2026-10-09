@@ -81,6 +81,19 @@ The `DWM 覆盖层` tab manages DwmCfgOverlayLab.dll inside `dwm.exe`:
   on purpose; the tab reports why.
 - Status lines show the DWM process id (active console session), whether the
   DLL is resident, and the IPC connection state, refreshed once per second.
+- **显示目标** selects **兼容默认 / 仅主屏 / 所有屏幕**. Changes are saved
+  immediately and synchronized when the DLL connects or reconnects. Compatible
+  mode preserves Win10's unrestricted legacy selection and Win11's primary-only
+  default. Explicit modes draw only on reliably identified, supported outputs;
+  unknown mappings and unsupported planes are skipped, not guessed. The tab
+  shows whether the DLL has acknowledged the setting; older DLLs require updating.
+
+Display selection is common to Win10 DXGI and Win11 DDisplay adapters. Each
+display/device has independent UI, font and backdrop state while receiving the
+same answer stream and scroll commands. Hide, display-policy changes and shutdown
+invalidate tracked overlay rectangles on all previously drawn outputs.
+The control layout is defined once in `../Shared/OverlayControlProtocol.h`;
+version 1 retains its existing size and hide/scroll command layout.
 
 Answers stream to both the local window and the overlay: every `AnswerEvent`
 is forwarded by `TeeAnswerSink` to `OverlayIpcSink`, which writes the ordered

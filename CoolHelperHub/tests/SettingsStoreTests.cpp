@@ -20,6 +20,7 @@ int main() {
 	expected.model = "vision-test-model";
 	expected.systemPrompt = "系统提示";
 	expected.userPrompt = "截图问题";
+    expected.overlayDisplayMode = coolhelper::DisplayMode::AllDisplays;
 	expected.captureHotkey.control = false;
 	expected.captureHotkey.alt = true;
 	expected.captureHotkey.shift = true;
@@ -49,6 +50,7 @@ int main() {
 		actual.model == expected.model &&
 		actual.systemPrompt == expected.systemPrompt &&
 		actual.userPrompt == expected.userPrompt &&
+        actual.overlayDisplayMode == expected.overlayDisplayMode &&
 		actual.captureHotkey.control == expected.captureHotkey.control &&
 		actual.captureHotkey.alt == expected.captureHotkey.alt &&
 		actual.captureHotkey.shift == expected.captureHotkey.shift &&
@@ -77,6 +79,7 @@ int main() {
 	passed = passed && store.Load(migrated, error) &&
 		migrated.systemPrompt == coolhelper::kDefaultInterviewSystemPrompt &&
 		migrated.userPrompt == coolhelper::kDefaultInterviewUserPrompt &&
+        migrated.overlayDisplayMode == coolhelper::DisplayMode::Compatible &&
 		migrated.systemPrompt.find("C++17") != std::string::npos &&
 		migrated.userPrompt.find("C++11") != std::string::npos &&
 		migrated.systemPrompt.find("C++20 实现") == std::string::npos &&
@@ -106,6 +109,13 @@ int main() {
 		migratedAlgorithm.systemPrompt.find('\n') != std::string::npos &&
 		migratedAlgorithm.userPrompt.find('\n') != std::string::npos;
 
+    {
+        std::ofstream invalid(path, std::ios::binary | std::ios::trunc);
+        invalid << R"({"overlayDisplayMode":999})";
+    }
+    coolhelper::AppSettings invalidMode;
+    passed = passed && store.Load(invalidMode, error) &&
+        invalidMode.overlayDisplayMode == coolhelper::DisplayMode::Compatible;
 	DeleteFileW(path.c_str());
 	if (!passed)
 		std::cerr << "DPAPI settings round-trip failed: " << error << '\n';

@@ -961,6 +961,7 @@ int App::Run(HINSTANCE instance, int showCommand) noexcept {
 	if (!overlayControl_.Start(ipcError))
 		Logger::Write(LogLevel::Warning,
 			("Overlay control channel not started: " + ipcError).c_str());
+	overlayControl_.SetDisplayMode(settings_.overlayDisplayMode);
 	CopyField(overlayDllPathField_, settings_.overlayDllPath);
 
 	std::string hotkeyError;
@@ -1719,6 +1720,30 @@ void App::RenderDwmPage() noexcept {
 			RefreshDwmStatus();
 	}
 	ImGui::Spacing();
+
+    ImGui::SeparatorText("显示目标");
+    int displayMode = static_cast<int>(settings_.overlayDisplayMode);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if (ImGui::Combo("##overlayDisplayMode", &displayMode, "兼容默认\0仅主屏\0所有屏幕\0")) {
+        AppSettings candidate = settings_;
+        candidate.overlayDisplayMode = static_cast<DisplayMode>(displayMode);
+        std::string error;
+        if (settingsStore_.Save(candidate, error)) {
+            settings_.overlayDisplayMode = candidate.overlayDisplayMode;
+            overlayControl_.SetDisplayMode(settings_.overlayDisplayMode);
+            dwmError_.clear();
+            dwmStatus_ = "显示目标已保存，连接覆盖层后自动同步";
+        } else dwmError_ = error;
+    }
+    DisabledTextWrapped("兼容默认保留原有行为：Win10 不限制屏幕，Win11 默认仅主屏。"
+        "所有屏幕会在每块已识别且受支持的屏幕上分别显示答案。");
+    if (overlayControl_.IsDllConnected()) {
+        const int applied = overlayControl_.QueryDisplayMode();
+        DisabledTextWrapped(applied < 0 ? "当前 DLL 未报告显示策略支持，请重新编译并更新 DLL。"
+            : applied == displayMode ? "显示目标已同步到覆盖层。"
+            : "正在同步显示目标…");
+    }
+    ImGui::Spacing();
 
 	ImGui::SeparatorText("DLL 路径");
 	const float pathRowWidth = ImGui::GetContentRegionAvail().x;

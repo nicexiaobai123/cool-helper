@@ -40,11 +40,7 @@ DWORD InvalidationWorker::Run() noexcept {
 		for (;;) {
 			RECT dirtyRect = {};
 			AcquireSRWLockExclusive(&lock_);
-			const bool hasWork = hasPendingRect_;
-			if (hasWork) {
-				dirtyRect = pendingRect_;
-				hasPendingRect_ = false;
-			}
+			const bool hasWork = regions_.Take(dirtyRect);
 			ReleaseSRWLockExclusive(&lock_);
 			if (!hasWork)
 				break;
@@ -99,78 +95,16 @@ void InvalidationWorker::Stop(DWORD timeoutMs) noexcept {
 	}
 }
 
-RECT InvalidationWorker::ToScreen(
-	IDXGISwapChain* swapChain,
-	const RECT& swapChainRect) noexcept {
-	RECT screenRect = swapChainRect;
-	IDXGISwapChain* standardSwapChain = nullptr;
-	if (FAILED(swapChain->QueryInterface(IID_PPV_ARGS(&standardSwapChain))))
-		return screenRect;
-	IDXGIOutput* output = nullptr;
-	if (SUCCEEDED(standardSwapChain->GetContainingOutput(&output))) {
-		DXGI_OUTPUT_DESC description = {};
-		if (SUCCEEDED(output->GetDesc(&description))) {
-			OffsetRect(&screenRect, description.DesktopCoordinates.left,
-				description.DesktopCoordinates.top);
-		}
-		output->Release();
-	}
-	standardSwapChain->Release();
-	return screenRect;
+void InvalidationWorker::QueueTarget(UINT64 key, bool hasCurrentRect, const RECT& current) noexcept {
+    AcquireSRWLockExclusive(&lock_);
+    regions_.Track(key, hasCurrentRect, current);
+    ReleaseSRWLockExclusive(&lock_);
+    if (event_) SetEvent(event_);
 }
-
-void InvalidationWorker::QueueMovedOverlay(
-	IDXGISwapChain* swapChain,
-	bool hasCurrentRect,
-	const RECT& currentSwapChainRect) noexcept {
-	RECT currentScreenRect = {};
-	if (hasCurrentRect) {
-		currentScreenRect = ToScreen(swapChain, currentSwapChainRect);
-	}
-	QueueScreenOverlay(hasCurrentRect, currentScreenRect);
+void InvalidationWorker::EraseAll() noexcept {
+    AcquireSRWLockExclusive(&lock_);
+    regions_.EraseAll();
+    ReleaseSRWLockExclusive(&lock_);
+    if (event_) SetEvent(event_);
 }
-
-void InvalidationWorker::QueueScreenOverlay(
-	bool hasCurrentRect, const RECT& currentScreenRect) noexcept {
-	if (!hasCurrentRect && !hasLastScreenRect_) {
-		return; // Nothing was drawn before; no region to recompose.
-	}
-
-	// Queue the union of the previous and current regions on every presented
-	// frame: the translucent UI blends over the composed desktop, so the
-	// compositor must redraw this region constantly. That keeps the backdrop
-	// live and leaves no pixels of this UI or of windows passing over the
-	// overlay area.
-	const bool hadPreviousRect = hasLastScreenRect_;
-	RECT dirtyRect = {};
-	bool hasDirtyRect = false;
-	if (hadPreviousRect) {
-		dirtyRect = lastScreenRect_;
-		hasDirtyRect = true;
-	}
-	if (hasCurrentRect) {
-		if (hasDirtyRect)
-			UnionRect(&dirtyRect, &dirtyRect, &currentScreenRect);
-		else {
-			dirtyRect = currentScreenRect;
-			hasDirtyRect = true;
-		}
-	}
-
-	lastScreenRect_ = currentScreenRect;
-	hasLastScreenRect_ = hasCurrentRect;
-	if (!hasDirtyRect || !event_)
-		return;
-
-	AcquireSRWLockExclusive(&lock_);
-	if (hasPendingRect_)
-		UnionRect(&pendingRect_, &pendingRect_, &dirtyRect);
-	else {
-		pendingRect_ = dirtyRect;
-		hasPendingRect_ = true;
-	}
-	ReleaseSRWLockExclusive(&lock_);
-	SetEvent(event_);
-}
-
 } // namespace dwm_overlay

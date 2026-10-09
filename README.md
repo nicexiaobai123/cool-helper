@@ -13,6 +13,11 @@ CoolHelperHub（管理员中台）
 
 - `CoolHelperHub/`：Win32 + Dear ImGui + D3D11 中台程序。负责截图、AI 请求、托盘/全局快捷键、DLL 安装与安全卸载，以及向 Overlay 发布答案。
 - `DwmCfgOverlayLab/`：注入 `dwm.exe` 的 x64 DLL。负责按已验证的 DWM 呈现路径渲染 ImGui Overlay、接收 IPC 答案流，并在卸载前恢复 Hook。
+- `Shared/`：中台与 DLL 共用的控制协议，包括覆盖层显示目标配置。
+
+覆盖层使用统一的 `FrameTarget → 显示策略 → RenderSession` 渲染结构，
+Windows 专用适配器只负责提取纹理和显示器身份。中台的“DWM 覆盖层”页
+可选择兼容默认、仅主屏或所有屏幕；各显示器独立维护 UI 与背景恢复状态。
 
 ## 构建
 

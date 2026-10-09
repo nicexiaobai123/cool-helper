@@ -67,6 +67,24 @@ set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY VS_STARTUP_PROJECT
 
 include(CTest)
 if(BUILD_TESTING)
+  # Compile changed UI/control sources without linking or launching the hub.
+  add_library(CoolHelperHubUiCompileCheck OBJECT src/App.cpp src/OverlayControl.cpp)
+  target_include_directories(CoolHelperHubUiCompileCheck PRIVATE
+    $<TARGET_PROPERTY:CoolHelperHub,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(CoolHelperHubUiCompileCheck PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+  target_compile_options(CoolHelperHubUiCompileCheck PRIVATE /W4 /permissive- /utf-8)
+
+  add_executable(CoolHelperOverlayControlTests tests/OverlayControlTests.cpp
+    src/OverlayControl.cpp ../DwmCfgOverlayLab/DwmCfgOverlayLab/IPC/ControlIpc.cpp)
+  target_include_directories(CoolHelperOverlayControlTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_compile_definitions(CoolHelperOverlayControlTests PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX COOLHELPER_CONTROL_TEST_NAMESPACE)
+  target_compile_options(CoolHelperOverlayControlTests PRIVATE /W4 /permissive- /utf-8)
+  target_link_libraries(CoolHelperOverlayControlTests PRIVATE advapi32)
+  add_test(NAME CoolHelperOverlayControlTests COMMAND CoolHelperOverlayControlTests)
+  set_tests_properties(CoolHelperOverlayControlTests PROPERTIES RESOURCE_LOCK overlay_control_test)
+
   add_executable(CoolHelperHubTests tests/SseParserTests.cpp)
   target_link_libraries(CoolHelperHubTests PRIVATE coolhelper_core)
   target_compile_options(CoolHelperHubTests PRIVATE /W4 /permissive- /utf-8)

@@ -2,6 +2,7 @@
 
 #include "../Hooks/HookTypes.h"
 #include "DDisplaySurfaceAdapter.h"
+#include "DxgiSurfaceAdapter.h"
 
 namespace dwm_overlay {
 
@@ -16,6 +17,8 @@ public:
 private:
 	OverlayRenderer& renderer_;
 	DDisplaySurfaceAdapter displayAdapter_;
+    DxgiSurfaceAdapter dxgiAdapter_;
+    DisplayTopology topology_;
 };
 
 } // namespace dwm_overlay
