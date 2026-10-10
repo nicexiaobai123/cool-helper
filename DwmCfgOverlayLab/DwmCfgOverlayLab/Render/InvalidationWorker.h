@@ -13,6 +13,12 @@ inline UINT InvalidationFlags(bool eraseBackground, bool desktop) noexcept {
         (eraseBackground ? RDW_ERASE : 0);
 }
 
+// Desktop itself does not receive WM_PAINT: RDW_ERASE is required to wake its
+// repaint. This is a one-shot show request, not per-frame erase/forced redraw.
+inline UINT FrameWakeFlags() noexcept {
+    return RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN;
+}
+
 // Pure bounded bookkeeping, separately testable without desktop invalidation.
 // The owning worker serializes these operations with its SRWLOCK.
 class DirtyRegions final {
@@ -28,12 +34,19 @@ public:
         *selected = { key, current, hasCurrent };
     }
     void EraseAll() noexcept {
+        wakePending_ = false; // A later hide supersedes an undelivered show wake.
         for (auto& region : regions_) {
             if (region.used) Queue(region.rect, true);
             region = {};
         }
     }
     void CleanupRect(const RECT& dirty) noexcept { Queue(dirty, true); }
+    void RequestFrameWake() noexcept { wakePending_ = true; }
+    bool TakeFrameWake() noexcept {
+        const bool pending = wakePending_;
+        wakePending_ = false;
+        return pending;
+    }
     bool Take(RECT& dirty, bool& eraseBackground) noexcept {
         if (!pending_) return false;
         dirty = dirty_; eraseBackground = eraseBackground_;
@@ -51,15 +64,21 @@ private:
     RECT dirty_ = {};
     bool pending_ = false;
     bool eraseBackground_ = false;
+    bool wakePending_ = false;
 };
 
 class InvalidationWorker final {
 public:
+    using WakeDispatcher = BOOL (WINAPI*)(HWND, const RECT*, HRGN, UINT);
+    // Injectable wake dispatch lets isolated tests avoid touching the desktop.
+    explicit InvalidationWorker(WakeDispatcher wakeDispatcher = ::RedrawWindow) noexcept
+        : wakeDispatcher_(wakeDispatcher) {}
 	bool Start() noexcept;
 	void Stop(DWORD timeoutMs = 2000) noexcept;
     void QueueTarget(UINT64 key, bool hasCurrentRect, const RECT& currentScreenRect) noexcept;
     void EraseAll() noexcept;
     void QueueCleanupRect(const RECT& screenRect) noexcept;
+    void QueueFrameWake() noexcept;
 
 private:
     struct Invalidation { RECT screenRect; bool eraseBackground; };
@@ -75,6 +94,7 @@ private:
 	HANDLE thread_ = nullptr;
 	volatile LONG stopping_ = 0;
     DirtyRegions regions_;
+    WakeDispatcher wakeDispatcher_;
 };
 
 } // namespace dwm_overlay

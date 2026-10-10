@@ -42,7 +42,16 @@ DWORD InvalidationWorker::Run() noexcept {
 			Invalidation request = {};
 			AcquireSRWLockExclusive(&lock_);
 			const bool hasWork = regions_.Take(request.screenRect, request.eraseBackground);
+			const bool wakeFrame = regions_.TakeFrameWake();
 			ReleaseSRWLockExclusive(&lock_);
+			if (wakeFrame && InterlockedCompareExchange(&stopping_, 0, 0) == 0) {
+				// No EnumWindows, synchronous WM_PAINT, input simulation or GPU work.
+				// The normal Present callback still owns all overlay rendering.
+				const BOOL requested = wakeDispatcher_(GetDesktopWindow(), nullptr,
+					nullptr, FrameWakeFlags());
+				DWM_LOG(requested ? "Overlay show: desktop repaint requested asynchronously"
+					: "Overlay show: desktop repaint request failed; waiting for native Present");
+			}
 			if (!hasWork)
 				break;
 			EnumWindows(InvalidateIntersectingWindow,
@@ -111,6 +120,12 @@ void InvalidationWorker::EraseAll() noexcept {
 void InvalidationWorker::QueueCleanupRect(const RECT& screenRect) noexcept {
     AcquireSRWLockExclusive(&lock_);
     regions_.CleanupRect(screenRect);
+    ReleaseSRWLockExclusive(&lock_);
+    if (event_) SetEvent(event_);
+}
+void InvalidationWorker::QueueFrameWake() noexcept {
+    AcquireSRWLockExclusive(&lock_);
+    regions_.RequestFrameWake();
     ReleaseSRWLockExclusive(&lock_);
     if (event_) SetEvent(event_);
 }

@@ -228,6 +228,12 @@ void TestDxgiResize() {
 }
 void TestDirtyRegions() {
     DirtyRegions regions;
+    Check(!regions.TakeFrameWake(), "No unsolicited desktop wake on startup");
+    regions.RequestFrameWake(); regions.RequestFrameWake();
+    Check(regions.TakeFrameWake() && !regions.TakeFrameWake(),
+        "Repeated show wakes coalesce into one one-shot repaint");
+    regions.RequestFrameWake(); regions.EraseAll();
+    Check(!regions.TakeFrameWake(), "Hide cancels an undelivered show wake");
     const RECT primary = { 10, 10, 100, 100 }, secondary = { -200, 20, -100, 150 };
     RECT dirty = {};
     bool eraseBackground = false;
@@ -250,11 +256,44 @@ void TestDirtyRegions() {
     Check((InvalidationFlags(true, true) & (RDW_ERASE | RDW_ALLCHILDREN)) == (RDW_ERASE | RDW_ALLCHILDREN) &&
         !(InvalidationFlags(false, true) & RDW_NOERASE) && !(InvalidationFlags(false, false) & RDW_NOERASE),
         "Desktop cleanup erases background; later normal frames do not suppress pending erases");
+    Check(FrameWakeFlags() == (RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN),
+        "Show wakes the desktop without synchronous painting or suppressing pending erase");
+    regions.RequestFrameWake(); regions.CleanupRect(secondary);
+    Check(regions.Take(dirty, eraseBackground) && eraseBackground &&
+        EqualRect(&dirty, &secondary) && regions.TakeFrameWake(),
+        "Show wake does not discard pending buffer cleanup");
+}
+
+HANDLE wakeAcknowledged = nullptr;
+volatile LONG wakeCount = 0, wakeFlags = 0, wakeInvalidArgs = 0;
+BOOL WINAPI FakeWake(HWND desktop, const RECT* rect, HRGN region, UINT flags) {
+    InterlockedIncrement(&wakeCount);
+    InterlockedExchange(&wakeFlags, static_cast<LONG>(flags));
+    if (!desktop || rect || region) InterlockedExchange(&wakeInvalidArgs, 1);
+    SetEvent(wakeAcknowledged);
+    return TRUE;
+}
+void TestAsyncFrameWake() {
+    wakeCount = wakeFlags = wakeInvalidArgs = 0;
+    wakeAcknowledged = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    Check(wakeAcknowledged != nullptr, "Wake test event");
+    InvalidationWorker worker(FakeWake);
+    const bool started = worker.Start();
+    DWORD result = WAIT_FAILED;
+    if (started) {
+        worker.QueueFrameWake();
+        result = WaitForSingleObject(wakeAcknowledged, 2000);
+        worker.Stop();
+    }
+    CloseHandle(wakeAcknowledged); wakeAcknowledged = nullptr;
+    Check(started && result == WAIT_OBJECT_0 && wakeCount == 1 && !wakeInvalidArgs &&
+        wakeFlags == static_cast<LONG>(FrameWakeFlags()),
+        "Show wake is dispatched once asynchronously, without touching the real desktop");
 }
 }
 int main() {
     try {
-        TestSessions(); TestHideCleanup(); TestHiddenRouting(); TestDxgiResize(); TestDirtyRegions();
+        TestSessions(); TestHideCleanup(); TestHiddenRouting(); TestDxgiResize(); TestDirtyRegions(); TestAsyncFrameWake();
         std::puts("PASS isolated multi-device UI sessions, hide cleanup/races, fresh pixels and DXGI resize");
         return 0;
     } catch (const std::exception& error) {

@@ -22,7 +22,7 @@ void OverlayRenderer::SetOverlayVisible(bool visible) noexcept {
     if (!visible) {
         InterlockedExchange(&cleanupPending_, 1);
         invalidationWorker_.EraseAll();
-    }
+    } else invalidationWorker_.QueueFrameWake();
     DWM_LOG(visible ? "Overlay shown by hub command" : "Overlay hidden by hub command");
 }
 void OverlayRenderer::SetCompatibilityDefault(DisplayMode mode) noexcept {
