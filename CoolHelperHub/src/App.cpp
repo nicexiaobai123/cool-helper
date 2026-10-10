@@ -3,6 +3,7 @@
 #include "coolhelper/DllInjector.h"
 #include "coolhelper/Logger.h"
 #include "coolhelper/Screenshot.h"
+#include "UiGlyphSeed.h"
 #include "resource.h"
 #include "../../Shared/MarkdownText.h"
 
@@ -28,16 +29,6 @@ namespace {
 
 constexpr UINT kTrayShow = 1001;
 constexpr UINT kTrayExit = 1003;
-
-// Exact static UI text also contributes punctuation and symbols outside the
-// core CJK range. Streamed answer text is backfilled dynamically as needed.
-constexpr char kStaticUiGlyphSeed[] =
-	"面试截图助手答案设置覆盖层接口配置提示词预设综合算法题系统问题"
-	"全局快捷键截图并提问切换显示隐藏当前保存后生效配置文件路径恢复默认"
-	"注入卸载状态进程已未找到连接中未知控制刷新安全管理员权限成功失败错误"
-	"请输入模型地址密钥使用仅能当前用户解密完成停止清空复制内容等待接收"
-	"字体字形窗口工具栏主题选项开关常见设置支持快捷组合按键覆盖显示层"
-	"答案向上下滚动";
 
 constexpr ImWchar kSymbolGlyphRanges[] = {
 	0x00B1, 0x00B1, // plus-minus
@@ -1116,6 +1107,7 @@ void App::InitializeImGui() noexcept {
 	// The range storage must persist because the atlas only stores its pointer.
 	ImFontGlyphRangesBuilder glyphBuilder;
 	glyphBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+	// Generated from project sources so new UI copy cannot silently miss glyphs.
 	glyphBuilder.AddText(kStaticUiGlyphSeed);
 	glyphBuilder.AddText(settings_.systemPrompt.c_str());
 	glyphBuilder.AddText(settings_.userPrompt.c_str());

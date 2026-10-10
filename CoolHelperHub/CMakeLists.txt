@@ -12,6 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
+include(cmake/GenerateUiGlyphSeed.cmake)
 
 add_library(coolhelper_core STATIC
   src/SseParser.cpp
@@ -45,6 +46,7 @@ add_executable(CoolHelperHub WIN32
   ${IMGUI_DIR}/imgui_impl_win32.cpp
 )
 target_include_directories(CoolHelperHub PRIVATE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated"
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/resources"
   "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
@@ -67,6 +69,16 @@ set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY VS_STARTUP_PROJECT
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(CoolHelperUiGlyphTests tests/UiGlyphTests.cpp
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp)
+  target_include_directories(CoolHelperUiGlyphTests PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/generated" "${IMGUI_DIR}")
+  target_compile_options(CoolHelperUiGlyphTests PRIVATE /W4 /permissive- /utf-8)
+  add_test(NAME CoolHelperUiGlyphTests COMMAND CoolHelperUiGlyphTests)
+
   # Compile changed UI/control sources without linking or launching the hub.
   add_library(CoolHelperHubUiCompileCheck OBJECT src/App.cpp src/OverlayControl.cpp)
   target_include_directories(CoolHelperHubUiCompileCheck PRIVATE

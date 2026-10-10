@@ -35,6 +35,9 @@ ctest --preset release
 
 ## 使用与设置
 
+界面中文字形由 CMake 自动从项目源码收集，启动时加载到正文、标题和代码字体；
+新增界面文案不需要手工维护字形清单。模型答案仍按需动态补字。
+
 在“设置”页配置 API Base URL、API Key、支持视觉输入的 Model，以及可选的
 System Prompt 和截图问题。例如 API Base URL 可以是 `https://api.openai.com/v1`。
 

@@ -1,0 +1,6 @@
+#pragma once
+
+// Generated from first-party UTF-8 source text; do not edit this build artifact.
+namespace coolhelper {
+inline constexpr char kStaticUiGlyphSeed[] = "@UI_GLYPH_SEED@";
+}
