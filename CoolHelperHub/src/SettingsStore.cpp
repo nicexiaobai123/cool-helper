@@ -20,6 +20,12 @@ constexpr std::string_view kLegacySystemPrompt =
 	"你是一个严谨的视觉问题分析助手。请直接给出清晰、准确的答案。";
 constexpr std::string_view kLegacyUserPrompt = "请分析截图中的内容并回答问题。";
 constexpr std::string_view kLegacyAlgorithmSystemPrompt =
+	"你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++11。"
+	"回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，"
+	"以及可能追问和对应的简短答案提示。"
+	"除非题目明确要求，否则不要使用更高版本的C++；信息不足时说明假设。";
+// Keep recognizing the shipped C++17 preset as well as the user's C++11 edit.
+constexpr std::string_view kLegacyCpp17AlgorithmSystemPrompt =
 	"你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++17 并兼容 C++11。"
 	"回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，"
 	"以及可能追问和对应的简短答案提示。"
@@ -141,7 +147,8 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 			settings.systemPrompt = kDefaultInterviewSystemPrompt;
 		if (settings.userPrompt == kLegacyUserPrompt)
 			settings.userPrompt = kDefaultInterviewUserPrompt;
-		if (settings.systemPrompt == kLegacyAlgorithmSystemPrompt)
+		if (settings.systemPrompt == kLegacyAlgorithmSystemPrompt ||
+			settings.systemPrompt == kLegacyCpp17AlgorithmSystemPrompt)
 			settings.systemPrompt = kAlgorithmInterviewSystemPrompt;
 		if (settings.userPrompt == kLegacyAlgorithmUserPrompt)
 			settings.userPrompt = kAlgorithmInterviewUserPrompt;
@@ -149,16 +156,40 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 		// custom text. These exact phrases only appeared in our previous preset.
 		ReplaceOnce(settings.systemPrompt,
 			"2. C/C++ 问题需关注语言标准、对象生命周期、内存管理、未定义行为、并发和 ABI。",
-			"2. C/C++ 问题默认以 C++17 为准并兼顾 C++11，关注对象生命周期、内存管理、"
-			"未定义行为、并发和 ABI；除非题目明确要求，否则不要使用 C++20 语法或库。");
+			"2. C/C++ 问题默认使用 C++11，关注对象生命周期、内存管理、"
+			"未定义行为、并发和 ABI；除非题目明确要求，否则不要使用高于 C++11 的语法或库。");
 		ReplaceOnce(settings.systemPrompt,
 			"5. 算法或代码题给出清晰的 C++20 实现，并说明时间复杂度、空间复杂度和边界情况。",
-			"5. 算法或代码题优先给出兼容 C++17 的实现，可用 C++11 完成时一并说明，"
+			"5. 算法或代码题默认给出 C++11 实现，只有题目明确要求时才使用更高版本，"
 			"并给出时间复杂度、空间复杂度和边界情况。");
 		ReplaceOnce(settings.userPrompt,
 			"若是代码题，请给出 C++20 实现、复杂度和边界情况；",
-			"若是代码题，请优先给出兼容 C++17 的实现，并尽量兼顾 C++11，"
+			"若是代码题，请默认给出 C++11 实现，只有题目明确要求时才使用更高版本，"
 			"说明复杂度和边界情况；");
+		// Upgrade exact language clauses from the C++17 presets, not arbitrary
+		// occurrences of a standard name in a user-authored question/prompt.
+		ReplaceOnce(settings.systemPrompt,
+			"2. C/C++ 问题默认以 C++17 为准并兼顾 C++11，关注对象生命周期、内存管理、"
+			"未定义行为、并发和 ABI；除非题目明确要求，否则不要使用 C++20 语法或库。",
+			"2. C/C++ 问题默认使用 C++11，关注对象生命周期、内存管理、"
+			"未定义行为、并发和 ABI；除非题目明确要求，否则不要使用高于 C++11 的语法或库。");
+		ReplaceOnce(settings.systemPrompt,
+			"5. 算法或代码题优先给出兼容 C++17 的实现，可用 C++11 完成时一并说明，"
+			"并给出时间复杂度、空间复杂度和边界情况。",
+			"5. 算法或代码题默认给出 C++11 实现，只有题目明确要求时才使用更高版本，"
+			"并给出时间复杂度、空间复杂度和边界情况。");
+		ReplaceOnce(settings.userPrompt,
+			"若是代码题，请优先给出兼容 C++17 的实现，并尽量兼顾 C++11，说明复杂度和边界情况；",
+			"若是代码题，请默认给出 C++11 实现，只有题目明确要求时才使用更高版本，说明复杂度和边界情况；");
+		ReplaceOnce(settings.systemPrompt,
+			"根据截图准确识别算法题，优先使用 C++17 并兼容 C++11。",
+			"根据截图准确识别算法题，优先使用 C++11。");
+		ReplaceOnce(settings.systemPrompt,
+			"除非题目明确要求，否则不要使用 C++20；信息不足时说明假设。",
+			"除非题目明确要求，否则不要使用高于 C++11 的语法或库；信息不足时说明假设。");
+		ReplaceOnce(settings.userPrompt,
+			"2. 再给出完整的 C++ 代码；",
+			"2. 再给出完整的 C++11 代码，只有题目明确要求时才使用更高版本；");
 		ReplaceOnce(settings.systemPrompt,
 			"6. 指出面试官可能继续追问的点以及容易答错的地方。",
 			"6. 指出面试官可能继续追问的点以及容易答错的地方，"

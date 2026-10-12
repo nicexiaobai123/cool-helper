@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <filesystem>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -41,6 +42,7 @@ int main() {
 	std::ifstream raw(path, std::ios::binary);
 	const std::string serialized(
 		(std::istreambuf_iterator<char>(raw)), std::istreambuf_iterator<char>());
+	raw.close(); // Later migration cases atomically replace this test file.
 	bool passed = serialized.find(expected.apiKey) == std::string::npos;
 
 	coolhelper::AppSettings actual;
@@ -80,7 +82,9 @@ int main() {
 		migrated.systemPrompt == coolhelper::kDefaultInterviewSystemPrompt &&
 		migrated.userPrompt == coolhelper::kDefaultInterviewUserPrompt &&
         migrated.overlayDisplayMode == coolhelper::DisplayMode::Compatible &&
-		migrated.systemPrompt.find("C++17") != std::string::npos &&
+		migrated.systemPrompt.find("默认使用 C++11") != std::string::npos &&
+		migrated.systemPrompt.find("高于 C++11") != std::string::npos &&
+		migrated.systemPrompt.find("C++17") == std::string::npos &&
 		migrated.userPrompt.find("C++11") != std::string::npos &&
 		migrated.systemPrompt.find("C++20 实现") == std::string::npos &&
 		migrated.overlayScrollDownHotkey.control &&
@@ -96,7 +100,7 @@ int main() {
 		std::ofstream legacyAlgorithm(path, std::ios::binary | std::ios::trunc);
 		legacyAlgorithm << R"({
   "version": 7,
-  "systemPrompt": "你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++17 并兼容 C++11。回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，以及可能追问和对应的简短答案提示。除非题目明确要求，否则不要使用 C++20；信息不足时说明假设。",
+  "systemPrompt": "你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++11。回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，以及可能追问和对应的简短答案提示。除非题目明确要求，否则不要使用更高版本的C++；信息不足时说明假设。",
   "userPrompt": "请解答截图中的算法面试题：先简述思路和关键点，再给出完整的 C++ 代码，最后说明时间复杂度、空间复杂度、边界情况，并列出面试官可能的追问及对应答案提示。"
 })";
 	}
@@ -108,6 +112,76 @@ int main() {
 			coolhelper::kAlgorithmInterviewUserPrompt &&
 		migratedAlgorithm.systemPrompt.find('\n') != std::string::npos &&
 		migratedAlgorithm.userPrompt.find('\n') != std::string::npos;
+
+	// Exercise shipped presets and the older C++20 generation rules, rather
+	// than testing only the locally edited legacy algorithm string above.
+	const auto replace = [](std::string& text, const char* from, const char* to) {
+		const auto at = text.find(from);
+		if (at != std::string::npos) text.replace(at, std::strlen(from), to);
+	};
+	const auto expectUpgrade = [&](const std::string& system, const std::string& user,
+		const char* expectedSystem, const char* expectedUser) {
+		coolhelper::AppSettings preset;
+		preset.systemPrompt = system;
+		preset.userPrompt = user;
+		if (!store.Save(preset, error)) return false;
+		coolhelper::AppSettings loaded;
+		if (!store.Load(loaded, error)) return false;
+		if (loaded.systemPrompt != expectedSystem || loaded.userPrompt != expectedUser) {
+			std::cerr << "Preset upgrade mismatch\n";
+			return false;
+		}
+		// Saving/loading an upgraded preset must not alter it a second time.
+		if (!store.Save(loaded, error)) return false;
+		coolhelper::AppSettings again;
+		return store.Load(again, error) && again.systemPrompt == loaded.systemPrompt &&
+			again.userPrompt == loaded.userPrompt;
+	};
+	std::string interview = coolhelper::kDefaultInterviewSystemPrompt;
+	std::string interviewQuestion = coolhelper::kDefaultInterviewUserPrompt;
+	replace(interview,
+		"2. C/C++ 问题默认使用 C++11，关注对象生命周期、内存管理、未定义行为、并发和 ABI；除非题目明确要求，否则不要使用高于 C++11 的语法或库。",
+		"2. C/C++ 问题默认以 C++17 为准并兼顾 C++11，关注对象生命周期、内存管理、未定义行为、并发和 ABI；除非题目明确要求，否则不要使用 C++20 语法或库。");
+	replace(interview,
+		"5. 算法或代码题默认给出 C++11 实现，只有题目明确要求时才使用更高版本，",
+		"5. 算法或代码题优先给出兼容 C++17 的实现，可用 C++11 完成时一并说明，");
+	replace(interviewQuestion,
+		"若是代码题，请默认给出 C++11 实现，只有题目明确要求时才使用更高版本，说明",
+		"若是代码题，请优先给出兼容 C++17 的实现，并尽量兼顾 C++11，说明");
+	passed = expectUpgrade(interview, interviewQuestion,
+		coolhelper::kDefaultInterviewSystemPrompt, coolhelper::kDefaultInterviewUserPrompt) && passed;
+	replace(interview,
+		"2. C/C++ 问题默认以 C++17 为准并兼顾 C++11，关注对象生命周期、内存管理、未定义行为、并发和 ABI；除非题目明确要求，否则不要使用 C++20 语法或库。",
+		"2. C/C++ 问题需关注语言标准、对象生命周期、内存管理、未定义行为、并发和 ABI。");
+	replace(interview,
+		"5. 算法或代码题优先给出兼容 C++17 的实现，可用 C++11 完成时一并说明，并给出时间复杂度、空间复杂度和边界情况。",
+		"5. 算法或代码题给出清晰的 C++20 实现，并说明时间复杂度、空间复杂度和边界情况。");
+	replace(interviewQuestion,
+		"若是代码题，请优先给出兼容 C++17 的实现，并尽量兼顾 C++11，说明复杂度和边界情况；",
+		"若是代码题，请给出 C++20 实现、复杂度和边界情况；");
+	passed = expectUpgrade(interview, interviewQuestion,
+		coolhelper::kDefaultInterviewSystemPrompt, coolhelper::kDefaultInterviewUserPrompt) && passed;
+	std::string algorithm = coolhelper::kAlgorithmInterviewSystemPrompt;
+	std::string algorithmQuestion = coolhelper::kAlgorithmInterviewUserPrompt;
+	replace(algorithm, "优先使用 C++11。", "优先使用 C++17 并兼容 C++11。");
+	replace(algorithm, "不要使用高于 C++11 的语法或库", "不要使用 C++20");
+	replace(algorithmQuestion,
+		"2. 再给出完整的 C++11 代码，只有题目明确要求时才使用更高版本；",
+		"2. 再给出完整的 C++ 代码；");
+	passed = expectUpgrade(algorithm, algorithmQuestion,
+		coolhelper::kAlgorithmInterviewSystemPrompt, coolhelper::kAlgorithmInterviewUserPrompt) && passed;
+	replace(algorithm, "优先使用 C++17 并兼容 C++11。", "优先使用 C++11。");
+	passed = expectUpgrade(algorithm, algorithmQuestion,
+		coolhelper::kAlgorithmInterviewSystemPrompt, coolhelper::kAlgorithmInterviewUserPrompt) && passed;
+	passed = expectUpgrade(
+		"你是一名 C/C++ 算法面试助手。根据截图准确识别算法题，优先使用 C++17 并兼容 C++11。"
+		"回答保持简洁，只给出解题思路、关键点、完整代码、时间与空间复杂度、边界情况，以及可能追问和对应的简短答案提示。"
+		"除非题目明确要求，否则不要使用 C++20；信息不足时说明假设。",
+		"请解答截图中的算法面试题：先简述思路和关键点，再给出完整的 C++ 代码，最后说明时间复杂度、空间复杂度、边界情况，并列出面试官可能的追问及对应答案提示。",
+		coolhelper::kAlgorithmInterviewSystemPrompt, coolhelper::kAlgorithmInterviewUserPrompt) && passed;
+	passed = expectUpgrade("自定义要求：解释 C++17 与 C++20 的差异。",
+		"题目明确要求用 C++20 实现。", "自定义要求：解释 C++17 与 C++20 的差异。",
+		"题目明确要求用 C++20 实现。") && passed;
 
     {
         std::ofstream invalid(path, std::ios::binary | std::ios::trunc);
