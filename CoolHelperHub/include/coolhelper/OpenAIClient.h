@@ -41,9 +41,11 @@ private:
 		IAnswerSink* sink) noexcept;
 	void SetActiveRequest(HINTERNET request) noexcept;
 	void ReleaseActiveRequest(HINTERNET request) noexcept;
+	void InterruptActiveRequest() noexcept;
 
 	std::thread worker_;
 	std::atomic_bool cancelRequested_ = false;
+	std::atomic_bool timeoutRequested_ = false;
 	std::atomic_bool running_ = false;
 	std::mutex requestMutex_;
 	HINTERNET activeRequest_ = nullptr;

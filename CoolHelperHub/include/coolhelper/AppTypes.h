@@ -61,6 +61,10 @@ enum class RequestState {
 	Error
 };
 
+inline constexpr std::uint32_t kDefaultRequestTimeoutSeconds = 120;
+inline constexpr std::uint32_t kMinRequestTimeoutSeconds = 10;
+inline constexpr std::uint32_t kMaxRequestTimeoutSeconds = 600;
+
 struct CaptureHotkeySettings {
 	bool control = true;
 	bool alt = true;
@@ -75,6 +79,7 @@ struct AppSettings {
 	std::string apiBaseUrl = "https://api.openai.com/v1";
 	std::string apiKey;
 	std::string model = "gpt-4o-mini";
+	std::uint32_t requestTimeoutSeconds = kDefaultRequestTimeoutSeconds;
 	std::string systemPrompt = kDefaultInterviewSystemPrompt;
 	std::string userPrompt = kDefaultInterviewUserPrompt;
 	CaptureHotkeySettings captureHotkey;

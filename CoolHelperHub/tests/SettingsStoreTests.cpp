@@ -19,6 +19,7 @@ int main() {
 	expected.apiBaseUrl = "https://example.invalid/v1";
 	expected.apiKey = "super-secret-test-key";
 	expected.model = "vision-test-model";
+	expected.requestTimeoutSeconds = 180;
 	expected.systemPrompt = "系统提示";
 	expected.userPrompt = "截图问题";
     expected.overlayDisplayMode = coolhelper::DisplayMode::AllDisplays;
@@ -43,13 +44,17 @@ int main() {
 	const std::string serialized(
 		(std::istreambuf_iterator<char>(raw)), std::istreambuf_iterator<char>());
 	raw.close(); // Later migration cases atomically replace this test file.
-	bool passed = serialized.find(expected.apiKey) == std::string::npos;
+	bool passed = serialized.find(expected.apiKey) == std::string::npos &&
+		serialized.find("\"version\": 10") != std::string::npos;
+	if (!passed)
+		std::cerr << "settings serialization check failed\n";
 
 	coolhelper::AppSettings actual;
 	passed = passed && store.Load(actual, error) &&
 		actual.apiBaseUrl == expected.apiBaseUrl &&
 		actual.apiKey == expected.apiKey &&
 		actual.model == expected.model &&
+		actual.requestTimeoutSeconds == expected.requestTimeoutSeconds &&
 		actual.systemPrompt == expected.systemPrompt &&
 		actual.userPrompt == expected.userPrompt &&
         actual.overlayDisplayMode == expected.overlayDisplayMode &&
@@ -66,6 +71,8 @@ int main() {
 			expected.overlayScrollUpHotkey.windows &&
 		actual.overlayScrollUpHotkey.virtualKey ==
 			expected.overlayScrollUpHotkey.virtualKey;
+	if (!passed)
+		std::cerr << "settings round-trip check failed\n";
 
 	// Settings saved by earlier releases should receive the interview preset,
 	// while custom prompts above remain untouched.
@@ -93,6 +100,8 @@ int main() {
 		migrated.overlayScrollUpHotkey.control &&
 		migrated.overlayScrollUpHotkey.alt &&
 		migrated.overlayScrollUpHotkey.virtualKey == VK_OEM_MINUS;
+	if (!passed)
+		std::cerr << "legacy prompt migration check failed\n";
 
 	// The previous algorithm preset used very long single lines. Migrate only
 	// that exact preset to the paragraph-formatted version used by the UI.
@@ -112,6 +121,8 @@ int main() {
 			coolhelper::kAlgorithmInterviewUserPrompt &&
 		migratedAlgorithm.systemPrompt.find('\n') != std::string::npos &&
 		migratedAlgorithm.userPrompt.find('\n') != std::string::npos;
+	if (!passed)
+		std::cerr << "legacy algorithm migration check failed\n";
 
 	// Exercise shipped presets and the older C++20 generation rules, rather
 	// than testing only the locally edited legacy algorithm string above.
@@ -190,6 +201,27 @@ int main() {
     coolhelper::AppSettings invalidMode;
     passed = passed && store.Load(invalidMode, error) &&
         invalidMode.overlayDisplayMode == coolhelper::DisplayMode::Compatible;
+	{
+		std::ofstream invalidTimeout(path, std::ios::binary | std::ios::trunc);
+		invalidTimeout << R"({"requestTimeoutSeconds":1})";
+	}
+	coolhelper::AppSettings fallbackTimeout;
+	passed = passed && store.Load(fallbackTimeout, error) &&
+		fallbackTimeout.requestTimeoutSeconds ==
+			coolhelper::kDefaultRequestTimeoutSeconds;
+	{
+		std::ofstream invalidTimeoutType(path, std::ios::binary | std::ios::trunc);
+		invalidTimeoutType << R"({"requestTimeoutSeconds":"fast"})";
+	}
+	coolhelper::AppSettings fallbackTimeoutType;
+	passed = passed && store.Load(fallbackTimeoutType, error) &&
+		fallbackTimeoutType.requestTimeoutSeconds ==
+			coolhelper::kDefaultRequestTimeoutSeconds;
+	coolhelper::AppSettings invalidSave = expected;
+	invalidSave.requestTimeoutSeconds =
+		coolhelper::kMaxRequestTimeoutSeconds + 1;
+	error.clear();
+	passed = passed && !store.Save(invalidSave, error) && !error.empty();
 	DeleteFileW(path.c_str());
 	if (!passed)
 		std::cerr << "DPAPI settings round-trip failed: " << error << '\n';

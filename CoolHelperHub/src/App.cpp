@@ -1342,9 +1342,18 @@ void App::RenderAnswerPage() noexcept {
 	StatusChip(StateText(), StateColor(requestState_));
 	if (IsActiveRequestState(requestState_) && requestStartedTick_ != 0) {
 		ImGui::SameLine();
-		const ULONGLONG elapsedSeconds =
-			(GetTickCount64() - requestStartedTick_) / 1000;
+		const ULONGLONG elapsedMs = GetTickCount64() - requestStartedTick_;
+		const ULONGLONG elapsedSeconds = elapsedMs / 1000;
 		ChipAlignedText("已等待 " + std::to_string(elapsedSeconds) + " 秒");
+		if (activeRequestTimeoutSeconds_) {
+			const ULONGLONG timeoutMs =
+				static_cast<ULONGLONG>(activeRequestTimeoutSeconds_) * 1000;
+			const float progress = static_cast<float>(
+				elapsedMs > timeoutMs ? timeoutMs : elapsedMs) /
+				static_cast<float>(timeoutMs);
+			ImGui::SameLine();
+			ImGui::ProgressBar(progress, ImVec2(96.0f, 0.0f), "超时");
+		}
 	}
 	if (screenshotWidth_ > 0) {
 		ImGui::SameLine();
@@ -1368,6 +1377,7 @@ void App::RenderAnswerPage() noexcept {
 		progressText_.clear();
 		lastError_.clear();
 		requestStartedTick_ = 0;
+		activeRequestTimeoutSeconds_ = 0;
 		requestState_ = RequestState::Idle;
 		activeRequestId_ = nextRequestId_++;
 		lastSequence_ = 0;
@@ -1396,7 +1406,8 @@ void App::RenderAnswerPage() noexcept {
 		ImGui::Separator();
 	}
 	else if (requestState_ == RequestState::Waiting) {
-		ImGui::TextDisabled("服务已连接，等待模型响应…");
+		ImGui::TextDisabled(
+			"服务已连接，等待模型响应；较长请求会按设置的总超时自动停止…");
 		ImGui::Separator();
 	}
 
@@ -1440,6 +1451,12 @@ void App::RenderSettingsPage() noexcept {
 		ImGui::TextUnformatted("Model");
 		ImGui::SetNextItemWidth(-FLT_MIN);
 		ImGui::InputText("##model", modelField_.data(), modelField_.size());
+		ImGui::TextUnformatted("请求超时（秒）");
+		ImGui::SetNextItemWidth(-FLT_MIN);
+		ImGui::InputScalar("##requestTimeout", ImGuiDataType_U32,
+			&requestTimeoutField_, nullptr, nullptr, "%u",
+			ImGuiInputTextFlags_EnterReturnsTrue);
+		ImGui::TextDisabled("范围 10–600 秒，从发起截图问答到答案结束统一计时。");
 	}
 	ImGui::EndChild();
 	ImGui::Spacing();
@@ -1807,6 +1824,7 @@ void App::CopySettingsToFields() noexcept {
 	CopyField(apiBaseUrlField_, settings_.apiBaseUrl);
 	CopyField(apiKeyField_, settings_.apiKey);
 	CopyField(modelField_, settings_.model);
+	requestTimeoutField_ = settings_.requestTimeoutSeconds;
 	CopyField(systemPromptField_, settings_.systemPrompt);
 	CopyField(userPromptField_, settings_.userPrompt);
 	captureHotkeyField_ = settings_.captureHotkey;
@@ -1820,6 +1838,14 @@ void App::SaveSettingsFromFields() noexcept {
 	updated.apiBaseUrl = apiBaseUrlField_.data();
 	updated.apiKey = apiKeyField_.data();
 	updated.model = modelField_.data();
+	if (requestTimeoutField_ < kMinRequestTimeoutSeconds ||
+		requestTimeoutField_ > kMaxRequestTimeoutSeconds) {
+		settingsStatus_ = "请求超时必须在 " +
+			std::to_string(kMinRequestTimeoutSeconds) + " 到 " +
+			std::to_string(kMaxRequestTimeoutSeconds) + " 秒之间";
+		return;
+	}
+	updated.requestTimeoutSeconds = requestTimeoutField_;
 	updated.systemPrompt = systemPromptField_.data();
 	updated.userPrompt = userPromptField_.data();
 	updated.captureHotkey = captureHotkeyField_;
@@ -2035,6 +2061,7 @@ void App::TriggerCapture() noexcept {
 	aiClient_.Cancel();
 	requestState_ = RequestState::Capturing;
 	requestStartedTick_ = 0;
+	activeRequestTimeoutSeconds_ = 0;
 	lastError_.clear();
 	answer_.clear();
 	progressText_.clear();
@@ -2067,13 +2094,14 @@ void App::TriggerCapture() noexcept {
 	activeRequestId_ = nextRequestId_++;
 	lastSequence_ = 0;
 	overlaySink_.SetRequestIdFilter(activeRequestId_);
+	activeRequestTimeoutSeconds_ = settings_.requestTimeoutSeconds;
+	requestStartedTick_ = GetTickCount64();
 	if (!aiClient_.Start(settings_, std::move(screenshot.png),
 		activeRequestId_, answerTee_)) {
 		lastError_ = "无法创建 AI 请求线程";
 		requestState_ = RequestState::Error;
 		return;
 	}
-	requestStartedTick_ = GetTickCount64();
 	requestState_ = RequestState::Connecting;
 	Logger::Write(LogLevel::Info, "Screenshot captured; request dispatched");
 }
@@ -2117,6 +2145,7 @@ void App::DrainAnswerEvents() noexcept {
 			answer_.clear();
 			progressText_.clear();
 			requestStartedTick_ = 0;
+			activeRequestTimeoutSeconds_ = 0;
 			requestState_ = RequestState::Idle;
 			break;
 		}

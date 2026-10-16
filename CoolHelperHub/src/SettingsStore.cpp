@@ -16,6 +16,8 @@ namespace {
 
 using nlohmann::json;
 
+constexpr std::uint32_t kSettingsVersion = 10;
+
 constexpr std::string_view kLegacySystemPrompt =
 	"你是一个严谨的视觉问题分析助手。请直接给出清晰、准确的答案。";
 constexpr std::string_view kLegacyUserPrompt = "请分析截图中的内容并回答问题。";
@@ -135,6 +137,15 @@ bool SettingsStore::Load(AppSettings& settings, std::string& error) const noexce
 		const json document = json::parse(stream);
 		settings.apiBaseUrl = document.value("apiBaseUrl", settings.apiBaseUrl);
 		settings.model = document.value("model", settings.model);
+		if (document.contains("requestTimeoutSeconds") &&
+			document["requestTimeoutSeconds"].is_number_unsigned()) {
+			const std::uint64_t timeoutSeconds =
+				document["requestTimeoutSeconds"].get<std::uint64_t>();
+			if (timeoutSeconds >= kMinRequestTimeoutSeconds &&
+				timeoutSeconds <= kMaxRequestTimeoutSeconds)
+				settings.requestTimeoutSeconds =
+					static_cast<std::uint32_t>(timeoutSeconds);
+		}
 		settings.systemPrompt = document.value("systemPrompt", settings.systemPrompt);
 		settings.userPrompt = document.value("userPrompt", settings.userPrompt);
 		settings.overlayDllPath = document.value("overlayDllPath",
@@ -306,16 +317,24 @@ bool SettingsStore::Save(
 	const AppSettings& settings,
 	std::string& error) const noexcept {
 	try {
+		if (settings.requestTimeoutSeconds < kMinRequestTimeoutSeconds ||
+			settings.requestTimeoutSeconds > kMaxRequestTimeoutSeconds) {
+			error = "请求超时必须在 " +
+				std::to_string(kMinRequestTimeoutSeconds) + " 到 " +
+				std::to_string(kMaxRequestTimeoutSeconds) + " 秒之间";
+			return false;
+		}
 		const std::string protectedKey = Protect(settings.apiKey);
 		if (!settings.apiKey.empty() && protectedKey.empty()) {
 			error = "API Key 加密失败";
 			return false;
 		}
 		const json document = {
-			{ "version", 9 },
+			{ "version", kSettingsVersion },
 			{ "apiBaseUrl", settings.apiBaseUrl },
 			{ "apiKeyProtected", protectedKey },
 			{ "model", settings.model },
+			{ "requestTimeoutSeconds", settings.requestTimeoutSeconds },
 			{ "systemPrompt", settings.systemPrompt },
 			{ "userPrompt", settings.userPrompt },
 			{ "overlayDllPath", settings.overlayDllPath },

@@ -164,6 +164,7 @@ coolhelper::AppSettings TestSettings(unsigned short port) {
 	settings.apiBaseUrl = "http://127.0.0.1:" + std::to_string(port) + "/v1/";
 	settings.apiKey = "local-test-key";
 	settings.model = "mock-vision";
+	settings.requestTimeoutSeconds = coolhelper::kDefaultRequestTimeoutSeconds;
 	return settings;
 }
 
@@ -320,17 +321,101 @@ bool TestCancellation() {
 		events.back().type == coolhelper::AnswerEventType::Cancelled;
 }
 
+bool TestTotalTimeout() {
+	MockServer server(200, {
+		"data: {\"choices\":[{\"delta\":{\"content\":\"too late\"}}]}\n\n",
+		"data: [DONE]\n\n"
+	}, 1500);
+	if (!server.Port())
+		return false;
+	coolhelper::AppSettings settings = TestSettings(server.Port());
+	settings.requestTimeoutSeconds = 1;
+	TestSink sink;
+	coolhelper::OpenAIClient client;
+	if (!client.Start(settings, { 1, 2, 3 }, 102, sink))
+		return false;
+	if (!sink.WaitForTerminal()) {
+		std::cerr << "total timeout produced no terminal event\n";
+		return false;
+	}
+	client.Cancel();
+	const auto events = sink.Events();
+	if (events.empty() ||
+		events.back().type != coolhelper::AnswerEventType::Failed ||
+		events.back().payload.find("请求超时") == std::string::npos ||
+		events.back().payload.find("1 秒内未完成") == std::string::npos) {
+		std::cerr << "unexpected timeout event";
+		if (!events.empty()) {
+			std::cerr << ": type=" << static_cast<int>(events.back().type)
+				<< " payload=" << events.back().payload;
+		}
+		std::cerr << '\n';
+		return false;
+	}
+	return true;
+}
+
+bool TestStageProgress() {
+	MockServer server(200, {
+		"data: {\"choices\":[{\"delta\":{\"content\":\"streamed\"}}]}\n\n",
+		"data: [DONE]\n\n"
+	}, 500);
+	if (!server.Port())
+		return false;
+	TestSink sink;
+	coolhelper::OpenAIClient client;
+	if (!client.Start(TestSettings(server.Port()), { 1, 2, 3 }, 101, sink) ||
+		!server.WaitForClient())
+		return false;
+	if (!sink.WaitForTerminal())
+		return false;
+	client.Cancel();
+	const auto events = sink.Events();
+	bool sawNetwork = false;
+	bool sawWaiting = false;
+	for (const auto& event : events) {
+		if (event.type != coolhelper::AnswerEventType::Progress)
+			continue;
+		sawNetwork = sawNetwork ||
+			event.payload.find("正在建立网络连接") != std::string::npos ||
+			event.payload.find("正在发送截图请求") != std::string::npos;
+		sawWaiting = sawWaiting ||
+			event.payload.find("等待模型响应") != std::string::npos;
+	}
+	return sawNetwork && sawWaiting &&
+		!events.empty() &&
+		events.back().type == coolhelper::AnswerEventType::Completed;
+}
+
 } // namespace
 
 int main() {
 	WSADATA data = {};
 	if (WSAStartup(MAKEWORD(2, 2), &data) != 0)
 		return 1;
-	const bool passed = TestStreaming() && TestReasoningProgress() &&
-		TestHttpError(401) &&
-		TestHttpError(429) && TestHttpError(500) &&
-		TestSiliconFlowHttpError() && TestEmptySuccessfulStream() &&
-		TestAnthropicUrlRejected() && TestCancellation();
+	const struct {
+		const char* name;
+		bool (*test)();
+	} tests[] = {
+		{ "streaming", TestStreaming },
+		{ "reasoning", TestReasoningProgress },
+		{ "http-401", [] { return TestHttpError(401); } },
+		{ "http-429", [] { return TestHttpError(429); } },
+		{ "http-500", [] { return TestHttpError(500); } },
+		{ "provider-error", TestSiliconFlowHttpError },
+		{ "empty-success", TestEmptySuccessfulStream },
+		{ "url-rejection", TestAnthropicUrlRejected },
+		{ "cancellation", TestCancellation },
+		{ "total-timeout", TestTotalTimeout },
+		{ "stage-progress", TestStageProgress },
+	};
+	bool passed = true;
+	for (const auto& test : tests) {
+		if (test.test())
+			continue;
+		std::cerr << "FAILED: " << test.name << '\n';
+		passed = false;
+	}
 	WSACleanup();
 	if (!passed)
 		std::cerr << "OpenAI-compatible WinHTTP integration test failed\n";
