@@ -19,7 +19,7 @@ int main() {
 	expected.apiBaseUrl = "https://example.invalid/v1";
 	expected.apiKey = "super-secret-test-key";
 	expected.model = "vision-test-model";
-	expected.requestTimeoutSeconds = 180;
+	expected.requestTimeoutSeconds = coolhelper::kMaxRequestTimeoutSeconds;
 	expected.systemPrompt = "系统提示";
 	expected.userPrompt = "截图问题";
     expected.overlayDisplayMode = coolhelper::DisplayMode::AllDisplays;

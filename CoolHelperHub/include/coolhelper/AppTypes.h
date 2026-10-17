@@ -63,7 +63,7 @@ enum class RequestState {
 
 inline constexpr std::uint32_t kDefaultRequestTimeoutSeconds = 120;
 inline constexpr std::uint32_t kMinRequestTimeoutSeconds = 10;
-inline constexpr std::uint32_t kMaxRequestTimeoutSeconds = 600;
+inline constexpr std::uint32_t kMaxRequestTimeoutSeconds = 1800;
 
 struct CaptureHotkeySettings {
 	bool control = true;

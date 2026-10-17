@@ -1454,9 +1454,8 @@ void App::RenderSettingsPage() noexcept {
 		ImGui::TextUnformatted("请求超时（秒）");
 		ImGui::SetNextItemWidth(-FLT_MIN);
 		ImGui::InputScalar("##requestTimeout", ImGuiDataType_U32,
-			&requestTimeoutField_, nullptr, nullptr, "%u",
-			ImGuiInputTextFlags_EnterReturnsTrue);
-		ImGui::TextDisabled("范围 10–600 秒，从发起截图问答到答案结束统一计时。");
+			&requestTimeoutField_, nullptr, nullptr, "%u");
+		ImGui::TextDisabled("范围 10–1800 秒，从发起截图问答到答案结束统一计时。");
 	}
 	ImGui::EndChild();
 	ImGui::Spacing();

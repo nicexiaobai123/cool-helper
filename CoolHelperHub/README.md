@@ -103,7 +103,7 @@ OverlayControlChannel → Shared/OverlayControlProtocol.h → 覆盖层控制
 ```
 
 - 网络请求在后台线程执行，支持取消；新截图会取消旧请求。每次请求有
-  可配置的 10–600 秒总超时，超时会自动中断 WinHTTP 阻塞操作并给出明确提示。
+  可配置的 10–1800 秒总超时，超时会自动中断 WinHTTP 阻塞操作并给出明确提示。
 - 连接、DNS、代理、证书、超时和服务响应错误会转化为带操作建议的界面错误信息。
 - 每个 `AnswerEvent` 按顺序发送 UTF-8 Markdown。答案通道为
   `Local\CoolHelper.Overlay.Answer.v1`，采用无锁 SPSC 环形队列和命名事件；
